@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="light dark">
+  <meta name="author" content="Graziano Melzi · OnAir Garage">
+  <title>Tag Fixer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img class="brand__icon" src="logo.svg" alt="" width="30" height="30">
+      <div>
+        <h1 class="brand__title" data-i18n="app.title">Tag Fixer</h1>
+        <p class="brand__sub" data-i18n="app.subtitle">BWF and ID3 tags in batch</p>
+      </div>
+    </div>
+    <div class="controls">
+      <label class="ctl"><span class="ctl__label" data-i18n="ctl.language">Language</span><select id="langSel"></select></label>
+      <label class="ctl"><span class="ctl__label" data-i18n="ctl.theme">Theme</span>
+        <select id="themeSel">
+          <option value="auto" data-i18n="theme.auto">Auto</option>
+          <option value="light" data-i18n="theme.light">Light</option>
+          <option value="dark" data-i18n="theme.dark">Dark</option>
+        </select>
+      </label>
+      <button type="button" id="settingsBtn" class="btn btn--ghost" data-i18n="ctl.settings">Settings</button>
+      <button type="button" id="helpBtn" class="btn btn--ghost" data-i18n="ctl.help">How it works</button>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tabMp3" class="tab" data-tab="mp3"><span data-i18n="tab.mp3">MP3 · ID3</span> <span class="count" id="countMp3">0</span></button>
+      <button type="button" role="tab" id="tabWav" class="tab" data-tab="wav"><span data-i18n="tab.wav">WAV · BWF</span> <span class="count" id="countWav">0</span></button>
+    </div>
+    <div class="toolbar__right">
+      <label class="check"><input id="optRecursive" type="checkbox"><span data-i18n="opt.recursive">Include subfolders</span></label>
+      <button type="button" id="addFilesBtn" class="btn btn--ghost" data-i18n="btn.addFiles">Add files…</button>
+      <button type="button" id="addFolderBtn" class="btn btn--ghost" data-i18n="btn.addFolder">Add folder…</button>
+      <button type="button" id="clearBtn" class="btn btn--ghost" data-i18n="btn.clear">Clear list</button>
+    </div>
+  </div>
+
+  <main class="sheet" id="sheet">
+    <div class="grid" id="grid" role="grid">
+      <div class="row row--head" id="head" role="row"></div>
+      <div class="row row--apply" id="applyRow" role="row"></div>
+      <div class="body" id="body"></div>
+    </div>
+    <div class="empty" id="empty">
+      <p class="empty__title" data-i18n="empty.title">Drop MP3 and WAV files or folders here</p>
+      <p class="empty__text" data-i18n="empty.text">Tags are read at once. Nothing is written until you save, and every file is backed up first.</p>
+    </div>
+  </main>
+
+  <div class="update-banner" id="updBanner" hidden>
+    <span id="updBannerText"></span>
+    <button type="button" class="btn btn--small" id="updBannerBtn" data-i18n="upd.open">Details</button>
+  </div>
+
+  <div class="bottom">
+    <div class="actionbar">
+      <div class="summary" id="summary" aria-live="polite"></div>
+      <div class="actions">
+        <button type="button" id="asciiBtn" class="btn btn--ghost" data-i18n="btn.ascii" hidden>Convert to ASCII</button>
+        <button type="button" id="discardBtn" class="btn btn--ghost" data-i18n="btn.discard" disabled>Discard edits</button>
+        <button type="button" id="restoreBtn" class="btn btn--ghost" data-i18n="btn.restore" disabled>Restore last batch</button>
+        <button type="button" id="saveBtn" class="btn btn--primary" disabled>Save…</button>
+      </div>
+    </div>
+    <footer class="foot">
+      <span data-i18n="foot.by">Graziano Melzi · OnAir Garage</span><span aria-hidden="true">·</span>
+      <a href="https://onairgarage.com" data-ext>onairgarage.com</a><span aria-hidden="true">·</span>
+      <span data-i18n="foot.license">MIT License</span><span aria-hidden="true">·</span>
+      <span><span data-i18n="foot.contact">Contact</span>: hello@onairgarage.com</span><span aria-hidden="true">·</span>
+      <span id="ver" class="mono">v0.0.0</span>
+    </footer>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <dialog id="confirmDlg" class="dlg">
+    <h2 data-i18n="confirm.title">Save changes</h2>
+    <p id="confirmText"></p>
+    <p class="mono pathline" id="confirmDir"></p>
+    <p id="confirmSpace" class="hint"></p>
+    <ul class="pairs" id="confirmList"></ul>
+    <div class="progress" id="saveProgress" hidden><div class="progress__bar" id="saveBar"></div></div>
+    <p class="hint" id="saveProgressText" hidden></p>
+    <div class="dlg__actions">
+      <button type="button" class="btn btn--ghost" id="confirmCancel" data-i18n="confirm.cancel">Cancel</button>
+      <button type="button" class="btn btn--primary" id="confirmOk" data-i18n="confirm.ok">Save</button>
+    </div>
+  </dialog>
+
+  <dialog id="resultDlg" class="dlg">
+    <h2 data-i18n="result.title">Done</h2>
+    <p id="resultText"></p>
+    <ul class="pairs" id="resultList"></ul>
+    <p class="hint" id="resultHint"></p>
+    <div class="dlg__actions"><button type="button" class="btn btn--primary" id="resultClose" data-i18n="result.close">Close</button></div>
+  </dialog>
+
+  <dialog id="restoreDlg" class="dlg">
+    <h2 data-i18n="restore.title">Restore last batch</h2>
+    <p id="restoreText"></p>
+    <ul class="pairs" id="restoreList"></ul>
+    <div class="dlg__actions">
+      <button type="button" class="btn btn--ghost" id="restoreCancel" data-i18n="confirm.cancel">Cancel</button>
+      <button type="button" class="btn btn--primary" id="restoreOk" data-i18n="restore.ok">Restore</button>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDlg" class="dlg">
+    <h2 data-i18n="settings.title">Settings</h2>
+    <h3 class="sub" data-i18n="settings.backup">Backup folder</h3>
+    <p class="mono pathline" id="backupDir"></p>
+    <div class="row-actions">
+      <button type="button" class="btn btn--ghost" id="backupChange" data-i18n="settings.change">Change…</button>
+      <button type="button" class="btn btn--ghost" id="backupOpen" data-i18n="settings.open">Open folder</button>
+    </div>
+    <p class="hint" data-i18n="settings.backupHint"></p>
+    <h3 class="sub" data-i18n="ctl.update">Updates</h3>
+    <p id="updText"></p>
+    <div class="progress" id="updProgress" hidden><div class="progress__bar" id="updBar"></div></div>
+    <label class="check"><input id="updAuto" type="checkbox"><span data-i18n="upd.auto">Check for updates when the app starts</span></label>
+    <div class="dlg__actions">
+      <button type="button" class="btn btn--ghost" id="updCheck" data-i18n="upd.check">Check for updates</button>
+      <button type="button" class="btn btn--ghost" id="updPage" hidden data-i18n="upd.page">Release page</button>
+      <button type="button" class="btn btn--primary" id="updDownload" hidden data-i18n="upd.download">Download</button>
+      <button type="button" class="btn btn--primary" id="updShow" hidden data-i18n="upd.show">Show file</button>
+      <button type="button" class="btn btn--ghost" id="settingsClose" data-i18n="upd.close">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="helpDlg" class="dlg dlg--help">
+    <div class="help__head"><h2 data-i18n="help.title">How it works</h2><button type="button" class="btn btn--ghost" id="helpClose" data-i18n="help.close">Close</button></div>
+    <div class="help__body" id="helpBody"></div>
+  </dialog>
+
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

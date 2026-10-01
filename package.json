@@ -1,0 +1,74 @@
+{
+  "name": "tag-fixer",
+  "version": "26.10.1",
+  "description": "Batch viewer and editor for broadcast metadata: ID3 tags on MP3 and BWF bext fields on WAV, with automatic backup",
+  "main": "main.js",
+  "type": "module",
+  "author": "Graziano Melzi <hello@onairgarage.com> (https://onairgarage.com)",
+  "homepage": "https://onairgarage.com/tools/tag-fixer/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/djgragra/tag-fixer.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test dev/*.test.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.onairgarage.tagfixer",
+    "productName": "Tag Fixer",
+    "publish": null,
+    "files": [
+      "main.js",
+      "preload.cjs",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.utilities",
+      "artifactName": "Tag-Fixer-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "assets/linux-icons",
+      "category": "Utility",
+      "artifactName": "Tag-Fixer-${version}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "Tag-Fixer-Setup-${version}.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "shortcutName": "Tag Fixer"
+    }
+  }
+}
