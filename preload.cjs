@@ -1,39 +1,51 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
+
 contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
-  info: () => ipcRenderer.invoke('app:info'),
+  info: invoke('app:info'),
+  supportInfo: invoke('app:support-info'),
   pathForFile: (file) => webUtils.getPathForFile(file),
-  files: {
-    pick: (kind, opts) => ipcRenderer.invoke('files:pick', kind, opts),
-    expand: (paths, opts) => ipcRenderer.invoke('files:expand', paths, opts)
-  },
-  tags: {
-    read: (paths) => ipcRenderer.invoke('tags:read', paths),
-    validate: (items) => ipcRenderer.invoke('tags:validate', items),
-    toAscii: (texts) => ipcRenderer.invoke('tags:to-ascii', texts)
+  files: { pick: invoke('files:pick'), expand: invoke('files:expand') },
+  tags: { read: invoke('tags:read'), validate: invoke('tags:validate'), toAscii: invoke('tags:to-ascii') },
+  cover: { pick: invoke('cover:pick'), preview: invoke('cover:preview') },
+  tools: {
+    pattern: invoke('tools:pattern'),
+    text: invoke('tools:text'),
+    datetime: invoke('tools:datetime'),
+    checks: invoke('tools:checks'),
+    renameCheck: invoke('rename:check'),
+    csvExport: invoke('csv:export'),
+    csvImport: invoke('csv:import')
   },
   save: {
-    preflight: (items) => ipcRenderer.invoke('save:preflight', items),
-    run: (items) => ipcRenderer.invoke('save:run', items),
+    preflight: invoke('save:preflight'),
+    run: invoke('save:run'),
     onProgress: (cb) => ipcRenderer.on('save:progress', (_e, p) => cb(p))
   },
-  restore: {
-    info: () => ipcRenderer.invoke('restore:info'),
-    check: () => ipcRenderer.invoke('restore:check'),
-    run: () => ipcRenderer.invoke('restore:run')
-  },
+  restore: { info: invoke('restore:info'), check: invoke('restore:check'), run: invoke('restore:run') },
   settings: {
-    get: () => ipcRenderer.invoke('settings:get'),
-    chooseBackupDir: () => ipcRenderer.invoke('settings:choose-backup-dir'),
-    openBackupDir: () => ipcRenderer.invoke('settings:open-backup-dir')
+    get: invoke('settings:get'),
+    update: invoke('settings:update'),
+    chooseBackupDir: invoke('settings:choose-backup-dir'),
+    openBackupDir: invoke('settings:open-backup-dir')
   },
+  backup: { export: invoke('backup:export'), import: invoke('backup:import'), apply: invoke('backup:apply') },
+  logs: { openFolder: invoke('logs:open-folder') },
   setDirty: (dirty) => ipcRenderer.send('dirty:set', !!dirty),
   update: {
-    check: () => ipcRenderer.invoke('update:check'),
-    download: () => ipcRenderer.invoke('update:download'),
-    reveal: (file) => ipcRenderer.invoke('update:reveal', file),
-    onProgress: (cb) => ipcRenderer.on('update:progress', (_e, received, total) => cb(received, total))
+    check: invoke('update:check'),
+    state: invoke('update:state'),
+    download: invoke('update:download'),
+    cancel: invoke('update:cancel'),
+    remind: invoke('update:remind'),
+    skip: invoke('update:skip'),
+    install: invoke('update:install'),
+    reveal: invoke('update:reveal'),
+    onProgress: (cb) => ipcRenderer.on('update:progress', (_e, received, total) => cb(received, total)),
+    onView: (cb) => ipcRenderer.on('update:view', (_e, view) => cb(view))
   },
-  openExternal: (url) => ipcRenderer.invoke('open-external', url)
+  whatsNew: { get: invoke('whatsnew:get'), seen: invoke('whatsnew:seen') },
+  openExternal: invoke('open-external')
 });

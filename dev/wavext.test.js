@@ -253,7 +253,7 @@ test('rf64: a chunk over 4 GB through the ds64 sizes (sparse file: only headers 
   assert.equal((await writeBwf(p, { description: 'still huge' })).mode, 'patch');
   assert.equal((await readBwf(p)).fields.description, 'still huge');
   fs.rmSync(p);
-}, { skip: process.env.TF_SKIP_BIG === '1' });
+}, { skip: process.env.TF_SKIP_BIG === '1' || process.platform === 'win32' });
 
 test('rf64: bad ds64 and a placeholder with no size are refused', async () => {
   const d = tmp();

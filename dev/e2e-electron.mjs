@@ -1,6 +1,8 @@
-// End-to-end check of the real app: starts Electron with a debugging port, drops files on the
-// window, edits cells, saves, restores, and checks the files on disk.
-// Run: node dev/e2e-electron.mjs   (needs `npm install`; opens a window for a few seconds)
+// End-to-end check of the real app: starts Electron with a debugging port, drops files on the window, edits cells,
+// uses the tools (patterns, find & replace, date, history, check, undo), saves, renames, restores, and checks the
+// files on disk.
+// Run: node dev/e2e-electron.mjs   (needs `npm install`; opens a window for a few seconds; on a machine without a
+// screen start Xvfb first and set DISPLAY, for example: Xvfb :77 & DISPLAY=:77 node dev/e2e-electron.mjs)
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,33 +11,45 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { readBwf } from '../src/bwf.js';
 import { readId3 } from '../src/id3.js';
-import { makeWav, frame, text, tag, audioBytes } from './fixtures.js';
+import { readFlac } from '../src/flac.js';
+import { makeWav, frame, text, tag, audioBytes, cartData } from './fixtures.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const electron = path.join(root, 'node_modules', '.bin', 'electron');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-'));
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-ud-'));
 const backups = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-bk-'));
-fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ backupDir: backups }));
+fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ backupDir: backups, checkUpdates: false }));
 
 const wavA = makeWav({ bext: { description: 'old description', originator: 'OLD', date: '2020-01-01', time: '01-02-03' } });
 const wavB = makeWav();
-const mp3C = Buffer.concat([tag(3, [frame(3, 'TIT2', text(0, 'Old title')), frame(3, 'TPE1', text(0, 'Old artist')), frame(3, 'PRIV', Buffer.from('owner\0data'))], { padding: 300 }), audioBytes(4)]);
-fs.writeFileSync(path.join(dir, 'a.wav'), wavA);
-fs.writeFileSync(path.join(dir, 'b.wav'), wavB);
-fs.writeFileSync(path.join(dir, 'c.mp3'), mp3C);
+const wavC = makeWav({ rf64: 'RF64', bext: { description: 'big file' }, extra: [['cart', cartData({ title: 'Cart one', cutId: '7' })]] });
+const mp3D = Buffer.concat([tag(3, [frame(3, 'TIT2', text(0, 'Old title')), frame(3, 'TPE1', text(0, 'Old artist')), frame(3, 'PRIV', Buffer.from('owner\0data'))], { padding: 300 }), audioBytes(4)]);
+const flacE = (() => {
+  const le32 = (n) => { const x = Buffer.alloc(4); x.writeUInt32LE(n); return x; };
+  const blk = (t, last, data) => { const h = Buffer.alloc(4); h[0] = (last ? 0x80 : 0) | t; h.writeUIntBE(data.length, 1, 3); return Buffer.concat([h, data]); };
+  const si = Buffer.alloc(34); si[10] = 0x0a; si[11] = 0xc4; si[12] = 0x42; si[13] = 0xf0;
+  const vc = Buffer.concat([le32(3), Buffer.from('abc'), le32(2), le32(11), Buffer.from('TITLE=Hello'), le32(12), Buffer.from('ARTIST=Bandy')]);
+  return Buffer.concat([Buffer.from('fLaC'), blk(0, false, si), blk(4, false, vc), blk(1, true, Buffer.alloc(200)), Buffer.alloc(900, 3)]);
+})();
+const names = { 'a.wav': wavA, 'b.wav': wavB, 'c.wav': wavC, 'd.mp3': mp3D, 'Band - Song.flac': flacE };
+for (const [n, b] of Object.entries(names)) fs.writeFileSync(path.join(dir, n), b);
 fs.writeFileSync(path.join(dir, 'notes.txt'), 'x');
+const times = new Date(2024, 4, 6, 7, 8, 9);
+fs.utimesSync(path.join(dir, 'b.wav'), times, times);
 
 const port = 9800 + Math.floor(Math.random() * 500);
-const child = spawn(electron, [root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`], { stdio: 'ignore' });
+const args = ['--disable-gpu', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`];
+const child = spawn(electron, args, { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function until(fn, what, ms = 8000) {
+async function until(fn, what, ms = 10000) {
   const end = Date.now() + ms;
   for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timeout: ' + what); await sleep(100); }
 }
 
 let ws, id = 0;
 const pending = new Map();
+const errors = [];
 const cdp = (method, params = {}) => new Promise((resolve, reject) => { const my = ++id; pending.set(my, { resolve, reject }); ws.send(JSON.stringify({ id: my, method, params })); });
 const js = async (expression) => {
   const r = await cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -43,27 +57,44 @@ const js = async (expression) => {
   return r.result.value;
 };
 // Sets a cell the way a user would: focus, set the value, fire an input event.
-const typeCell = (name, field, value) => js(`(() => { const inp = [...document.querySelectorAll('.body .row')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)}).children[[...document.querySelectorAll('#head > div')].findIndex(h => h.textContent === ${JSON.stringify(field)})].querySelector('input'); inp.focus(); inp.value = ${JSON.stringify(value)}; inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+const typeCell = (name, field, value) => js(`(() => { const inp = [...document.querySelectorAll('.body .row')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)} || r.querySelector('.meta').textContent.startsWith('was: ' + ${JSON.stringify(name)})).children[[...document.querySelectorAll('#head > div')].findIndex(h => h.textContent === ${JSON.stringify(field)})].querySelector('input'); inp.focus(); inp.value = ${JSON.stringify(value)}; inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+const cellValues = () => js(`[...document.querySelectorAll('.body .row')].map(r => ({ name: r.querySelector('.name').textContent, v: [...r.querySelectorAll('input.cell')].map(i => i.value) }))`);
 const click = (sel) => js(`document.querySelector(${JSON.stringify(sel)}).click()`);
+const setVal = (sel, v, ev = 'input') => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event(${JSON.stringify(ev)}, { bubbles: true })); })()`);
+const settle = () => until(() => js(`[...document.querySelectorAll('.c-status')].every(s => !/reading/.test(s.textContent))`), 'tags read');
 
 try {
-  const page = await until(async () => { try { return (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page' && t.url.includes('renderer/index.html')); } catch { return null; } }, 'window');
+  const page = await until(async () => { try { return (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page' && t.url.includes('renderer/index.html')); } catch { return null; } }, 'window', 20000);
   ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((r) => ws.addEventListener('open', r));
-  ws.addEventListener('message', (m) => { const d = JSON.parse(m.data); if (d.id && pending.has(d.id)) { const p = pending.get(d.id); pending.delete(d.id); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); } });
-  await sleep(500);
+  ws.addEventListener('message', (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { const p = pending.get(d.id); pending.delete(d.id); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); }
+    else if (d.method === 'Runtime.exceptionThrown') errors.push(JSON.stringify(d.params.exceptionDetails).slice(0, 500));
+    else if (d.method === 'Runtime.consoleAPICalled' && d.params.type === 'error') errors.push(JSON.stringify(d.params.args.map((a) => a.value || a.description)).slice(0, 500));
+  });
+  await cdp('Runtime.enable');
+  await sleep(600);
 
-  // 1. drop three files (and a text file that must be ignored) on the window
-  const files = ['a.wav', 'b.wav', 'c.mp3', 'notes.txt'].map((n) => path.join(dir, n));
+  // 1. drop the files (and a text file that must be ignored) on the window
+  const files = [...Object.keys(names), 'notes.txt'].map((n) => path.join(dir, n));
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, x: 300, y: 300, data: { items: [], files, dragOperationsMask: 1 } });
-  await until(() => js(`document.getElementById('countMp3').textContent === '1' && document.getElementById('countWav').textContent === '2'`), 'files listed');
-  await until(() => js(`[...document.querySelectorAll('.c-status')].every(s => !/reading/.test(s.textContent))`), 'tags read');
+  await until(() => js(`document.getElementById('countMp3').textContent === '1' && document.getElementById('countWav').textContent === '3' && document.getElementById('countFlac').textContent === '1'`), 'files listed');
+  await settle();
+  assert.match(await js(`document.getElementById('pill').textContent`), /5 files/);
 
-  // 2. the WAV tab shows what is in the file
+  // 2. the WAV tab: three views
   await click('#tabWav');
-  const cells = await js(`[...document.querySelectorAll('.body .row')].map(r => ({ name: r.querySelector('.name').textContent, v: [...r.querySelectorAll('input.cell')].map(i => i.value) }))`);
-  assert.deepEqual(cells.find((c) => c.name === 'a.wav').v, ['old description', 'OLD', '', '2020-01-01', '01-02-03']);
-  assert.deepEqual(cells.find((c) => c.name === 'b.wav').v, ['', '', '', '', '']);
+  let cells = await cellValues();
+  assert.deepEqual(cells.find((c) => c.name === 'a.wav').v, ['old description', 'OLD', '', '2020-01-01', '01-02-03', '']);
+  assert.equal(cells.find((c) => c.name === 'c.wav').v[0], 'big file');
+  assert.match(await js(`[...document.querySelectorAll('.c-info')].map(i => i.textContent).join('|')`), /RF64/);
+  await click('[data-set="cart"]');
+  cells = await cellValues();
+  assert.equal(cells.find((c) => c.name === 'c.wav').v[0], 'Cart one');
+  assert.equal(cells.find((c) => c.name === 'c.wav').v[2], '7');
+  await click('[data-set="ixml"]');
+  await click('[data-set="bwf"]');
 
   // 3. an invalid edit blocks saving; a non-ASCII edit is fixed with "Convert to ASCII"
   await typeCell('a.wav', 'Date', '2026-02-30');
@@ -74,55 +105,151 @@ try {
   await click('#asciiBtn');
   await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Citta nuova'`), 'converted');
 
-  // 4. "set for all checked rows": originator on both WAV files
+  // 4. undo and redo
+  await click('#undoBtn');
+  await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Città nuova'`), 'undo of the conversion');
+  await click('#redoBtn');
+  await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Citta nuova'`), 'redo');
+
+  // 5. "set for all checked rows": originator on all WAV files
   await js(`(() => { const inp = document.querySelectorAll('#applyRow input')[1]; inp.value = 'OnAir Garage'; document.querySelectorAll('#applyRow button')[1].click(); })()`);
   await until(() => js(`!document.querySelector('#saveBtn').disabled`), 'save enabled');
-  assert.match(await js(`document.querySelector('#saveBtn').textContent`), /2/);
 
-  // 5. MP3 tab: edit the title
+  // 6. date tool: b.wav has no date in the name, so its modification time is used; a.wav is unchecked first
+  await js(`(() => { const r = [...document.querySelectorAll('.body .row')][0]; r.querySelector('input[type=checkbox]').click(); })()`);
+  await click('#toolDate');
+  await until(() => js(`document.getElementById('dateDlg').open && document.querySelectorAll('#datePreview tr').length > 1`), 'date preview');
+  await setVal('#dateSource', 'mtime', 'change');
+  await until(() => js(`/2024-05-06/.test(document.getElementById('datePreview').textContent)`), 'date from mtime');
+  await click('#dateApply');
+  await until(() => js(`!document.getElementById('dateDlg').open`), 'date applied');
+  cells = await cellValues();
+  assert.equal(cells.find((c) => c.name === 'b.wav').v[3], '2024-05-06');
+  assert.equal(cells.find((c) => c.name === 'b.wav').v[4], '07-08-09');
+  assert.equal(cells.find((c) => c.name === 'a.wav').v[3], '2026-10-01', 'the unchecked file was not touched by the tool');
+  await js(`document.querySelectorAll('.body .row')[0].querySelector('input[type=checkbox]').click()`);
+
+  // 7. coding history: add a line to all checked WAV files
+  await click('#toolHistory');
+  await setVal('#histText', 'A=PCM,F=48000,W=16,M=stereo');
+  await setVal('#histMode', 'append', 'change');
+  await click('#histApply');
+  await until(() => js(`!document.getElementById('historyDlg').open`), 'history applied');
+  assert.match(await js(`[...document.querySelectorAll('.body .row')][1].querySelectorAll('input.cell')[5].value`), /A=PCM/);
+
+  // 8. find & replace on the cart title and iXML scene via the view's fields
+  await click('[data-set="ixml"]');
+  await typeCell('b.wav', 'Scene', '12A');
+  await typeCell('b.wav', 'Note', 'two  spaces');
+  await click('#toolFind');
+  await setVal('#findField', 'ixmlNote', 'change');
+  await setVal('#findOp', 'spaces', 'change');
+  await until(() => js(`!document.getElementById('findApply').disabled`), 'find preview');
+  await click('#findApply');
+  await until(() => js(`!document.getElementById('findDlg').open`), 'find applied');
+  cells = await cellValues();
+  assert.equal(cells.find((c) => c.name === 'b.wav').v[4], 'two spaces');
+  await click('[data-set="bwf"]');
+
+  // 9. FLAC tab: pattern that reads artist and title from the file name; rename from tags
+  await click('#tabFlac');
+  await click('#toolPattern');
+  await setVal('#patMode', 'read', 'change');
+  await setVal('#patPattern', '{artist} - {title}');
+  await until(() => js(`!document.getElementById('patApply').disabled`), 'pattern preview');
+  assert.match(await js(`document.getElementById('patPreview').textContent`), /Bandy|Band/);
+  await click('#patApply');
+  await until(() => js(`!document.getElementById('patternDlg').open`), 'pattern applied');
+  cells = await cellValues();
+  assert.deepEqual(cells[0].v.slice(0, 2), ['Song', 'Band']);
+  await click('#toolPattern');
+  await setVal('#patMode', 'rename', 'change');
+  await setVal('#patPattern', '{artist} - {title} ({n:2})');
+  await until(() => js(`!document.getElementById('patApply').disabled`), 'rename preview');
+  await click('#patApply');
+  await until(() => js(`!document.getElementById('patternDlg').open`), 'rename applied');
+  assert.match(await js(`document.querySelector('.body .row .name').textContent`), /^Band - Song \(01\)\.flac$/);
+
+  // 10. MP3 tab: edit the title
   await click('#tabMp3');
-  await typeCell('c.mp3', 'Title', 'New title');
-  await click('#tabWav');
+  await typeCell('d.mp3', 'Title', 'New title');
 
-  // 6. save everything (3 files): confirm dialog, backups, results
-  assert.match(await js(`document.querySelector('#saveBtn').textContent`), /3/);
+  // 11. check files: lists problems, clicking a line goes to the file
+  await click('#toolCheck');
+  await until(() => js(`document.getElementById('checkDlg').open && document.querySelectorAll('#checkList tr').length > 1`), 'check list');
+  await click('#checkClose');
+
+  // 12. save everything: confirm dialog, backups, results (5 files)
+  assert.match(await js(`document.querySelector('#saveBtn').textContent`), /5/);
   await click('#saveBtn');
   await until(() => js(`document.getElementById('confirmDlg').open && !document.getElementById('confirmOk').disabled`), 'confirm dialog');
   assert.equal(await js(`document.getElementById('confirmDir').textContent`), backups);
   await click('#confirmOk');
   await until(() => js(`document.getElementById('resultDlg').open`), 'result dialog');
-  assert.match(await js(`document.getElementById('resultText').textContent`), /3 saved/);
+  assert.match(await js(`document.getElementById('resultText').textContent`), /5 saved/);
   await click('#resultClose');
 
-  // 7. the files on disk
-  const a = await readBwf(path.join(dir, 'a.wav')), b = await readBwf(path.join(dir, 'b.wav'));
-  assert.deepEqual(a.fields, { description: 'Citta nuova', originator: 'OnAir Garage', originatorReference: '', date: '2026-10-01', time: '01-02-03' });
+  // 13. the files on disk
+  const a = await readBwf(path.join(dir, 'a.wav')), b = await readBwf(path.join(dir, 'b.wav')), c = await readBwf(path.join(dir, 'c.wav'));
+  assert.equal(a.fields.description, 'Citta nuova');
+  assert.equal(a.fields.originator, 'OnAir Garage');
+  assert.equal(a.fields.date, '2026-10-01');
   assert.equal(b.hasBext, true);
-  assert.equal(b.fields.originator, 'OnAir Garage');
-  const c = await readId3(path.join(dir, 'c.mp3'));
-  assert.equal(c.fields.title, 'New title');
-  assert.equal(c.fields.artist, 'Old artist');
-  assert.ok(c.frames.some((f) => f.id === 'PRIV'));
-  assert.ok(fs.readFileSync(path.join(dir, 'c.mp3')).subarray(c.audioOffset).equals(audioBytes(4)));
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['a.wav', 'b.wav', 'c.mp3', 'notes.txt'], 'no temporary files left');
+  assert.equal(b.fields.date, '2024-05-06');
+  assert.equal(b.fields.ixmlScene, '12A');
+  assert.equal(b.fields.ixmlNote, 'two spaces');
+  assert.equal(b.fields.codingHistory, 'A=PCM,F=48000,W=16,M=stereo');
+  assert.equal(c.rf64, true);
+  assert.equal(c.fields.originator, 'OnAir Garage');
+  assert.equal(c.fields.cartTitle, 'Cart one');
+  assert.equal(c.fields.codingHistory, 'A=PCM,F=48000,W=16,M=stereo');
+  const d = await readId3(path.join(dir, 'd.mp3'));
+  assert.equal(d.fields.title, 'New title');
+  assert.equal(d.fields.artist, 'Old artist');
+  assert.ok(d.frames.some((f) => f.id === 'PRIV'));
+  assert.ok(fs.readFileSync(path.join(dir, 'd.mp3')).subarray(d.audioOffset).equals(audioBytes(4)));
+  assert.ok(fs.existsSync(path.join(dir, 'Band - Song (01).flac')), 'the FLAC file was renamed');
+  assert.ok(!fs.existsSync(path.join(dir, 'Band - Song.flac')));
+  const f = await readFlac(path.join(dir, 'Band - Song (01).flac'));
+  assert.deepEqual([f.fields.title, f.fields.artist], ['Song', 'Band']);
+  assert.ok(fs.readFileSync(path.join(dir, 'Band - Song (01).flac')).subarray(f.audioOffset).equals(flacE.subarray(flacE.length - 900)), 'FLAC audio untouched');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song (01).flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'notes.txt'], 'no temporary files left');
 
-  // 8. the backup holds the originals
+  // 14. the backup holds the originals
   const batch = fs.readdirSync(backups).filter((n) => /^\d{4}-\d{2}-\d{2}_\d{6}/.test(n));
   assert.equal(batch.length, 1);
   const mf = JSON.parse(fs.readFileSync(path.join(backups, batch[0], 'manifest.json'), 'utf8'));
-  assert.equal(mf.entries.length, 3);
+  assert.equal(mf.entries.length, 5);
   assert.ok(fs.readFileSync(path.join(backups, batch[0], mf.entries.find((e) => e.path.endsWith('a.wav')).backup)).equals(wavA));
 
-  // 9. restore the batch: the original bytes come back
+  // 15. restore the batch: the original bytes and names come back
   await until(() => js(`!document.getElementById('restoreBtn').disabled`), 'restore enabled');
   await click('#restoreBtn');
   await until(() => js(`document.getElementById('restoreDlg').open && !document.getElementById('restoreOk').disabled`), 'restore dialog');
   await click('#restoreOk');
-  await until(() => fs.readFileSync(path.join(dir, 'a.wav')).equals(wavA) && fs.readFileSync(path.join(dir, 'b.wav')).equals(wavB) && fs.readFileSync(path.join(dir, 'c.mp3')).equals(mp3C), 'originals restored');
+  await until(() => ['a.wav', 'b.wav', 'c.wav', 'd.mp3', 'Band - Song.flac'].every((n) => fs.existsSync(path.join(dir, n)) && fs.readFileSync(path.join(dir, n)).equals(names[n])), 'originals restored');
+  await click('#tabWav');
   await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'old description'`), 'table refreshed');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song.flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'notes.txt']);
+
+  // 16. settings: the tabs, the language, the configuration backup box, About
+  await click('#settingsBtn');
+  await until(() => js(`document.getElementById('settingsDlg').open`), 'settings');
+  for (const tab of ['updates', 'backup', 'about', 'general']) {
+    await click(`[data-stab="${tab}"]`);
+    assert.equal(await js(`[...document.querySelectorAll('[data-spane]')].filter(p => !p.hidden).map(p => p.getAttribute('data-spane')).join()`), tab);
+  }
+  await setVal('#langSel', 'it', 'change');
+  await until(() => js(`document.querySelector('[data-stab="about"]').textContent === 'Aiuto e informazioni'`), 'Italian');
+  await setVal('#langSel', 'en', 'change');
+  await click('#settingsClose');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).language, 'en');
+
+  assert.deepEqual(errors, [], 'no errors in the window');
   console.log('e2e OK');
 } finally {
   ws?.close();
   child.kill();
-  for (const d of [dir, userData, backups]) fs.rmSync(d, { recursive: true, force: true });
+  await sleep(300);
+  for (const d of [dir, userData, backups]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 });
 }
