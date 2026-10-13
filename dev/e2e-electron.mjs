@@ -19,7 +19,7 @@ const electron = path.join(root, 'node_modules', '.bin', 'electron');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-'));
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-ud-'));
 const backups = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-e2e-bk-'));
-fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ backupDir: backups, checkUpdates: false }));
+fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ backupDir: backups, checkUpdates: false, lastSeenVersion: '26.10.1' }));
 
 const wavA = makeWav({ bext: { description: 'old description', originator: 'OLD', date: '2020-01-01', time: '01-02-03' } });
 const wavB = makeWav();
@@ -87,6 +87,14 @@ try {
   await cdp('Runtime.enable');
   await sleep(600);
 
+  // 0. the first start after an update shows What's new once (the version before was 26.10.1)
+  await until(() => js(`document.getElementById('whatsNewDlg').open`), "What's new");
+  assert.match(await js(`document.getElementById('whatsNewTitle').textContent`), /What's new in 26\.10\./);
+  assert.ok(await js(`document.querySelectorAll('#whatsNewList li').length >= 5`));
+  await click('#whatsNewOk');
+  await until(() => js(`!document.getElementById('whatsNewDlg').open`), "What's new closed");
+  await until(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).lastSeenVersion === JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version, 'version remembered');
+
   // 1. drop the files (and a text file that must be ignored) on the window
   const files = [...Object.keys(names), 'notes.txt'].map((n) => path.join(dir, n));
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, x: 300, y: 300, data: { items: [], files, dragOperationsMask: 1 } });
@@ -121,6 +129,14 @@ try {
   await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Città nuova'`), 'undo of the conversion');
   await click('#redoBtn');
   await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Citta nuova'`), 'redo');
+
+  // 4b. the keyboard: Ctrl+Z / Ctrl+Y with the focus in a cell (one step each, not two)
+  const key = async (k, code, vk, modifiers = 2) => { for (const type of ['rawKeyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, modifiers, key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }); };
+  await js(`document.querySelector('.body .row input.cell').focus()`);
+  await key('z', 'KeyZ', 90);
+  await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Città nuova'`), 'Ctrl+Z');
+  await key('y', 'KeyY', 89);
+  await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'Citta nuova'`), 'Ctrl+Y');
 
   // 5. "set for all checked rows": originator on all WAV files
   await js(`(() => { const inp = document.querySelectorAll('#applyRow input')[1]; inp.value = 'OnAir Garage'; document.querySelectorAll('#applyRow button')[1].click(); })()`);
