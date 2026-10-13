@@ -34,7 +34,9 @@ test('read: v2.3 latin1 and utf16, comment, genre, year', async () => {
   const d = tmp();
   const r = await readId3(put(d, 'a.mp3', Buffer.concat([v3Tag(), AUDIO])));
   assert.equal(r.version, '2.3');
-  assert.deepEqual(r.fields, { title: 'Old title', artist: 'Artista è', album: 'Album', year: '2019', track: '3/12', genre: '(13)Pop', comment: 'Un commento' });
+  assert.deepEqual({ ...r.fields, cover: '' }, { title: 'Old title', artist: 'Artista è', album: 'Album', year: '2019', track: '3/12', genre: '(13)Pop', comment: 'Un commento', cover: '' });
+  assert.match(r.fields.cover, /^image\/jpeg · 1 KB$/);
+  assert.equal(r.cover.type, 3);
   assert.ok(r.writable);
 });
 
@@ -169,16 +171,8 @@ test('extended header is dropped, frames kept', async () => {
   assert.equal(r.flags & 0x40, 0);
 });
 
-test('not editable: v2.2, unsynchronised tag, compressed frame; file untouched', async () => {
+test('not editable: unsynchronised tag, compressed v2.2 tag, compressed frame; file untouched', async () => {
   const d = tmp();
-  const body22 = Buffer.concat([Buffer.from('TT2'), Buffer.from([0, 0, 6]), Buffer.from([0]), Buffer.from('Hello')]);
-  const t22 = Buffer.concat([Buffer.from('ID3'), Buffer.from([2, 0, 0]), syncsafe(body22.length), body22]);
-  const p22 = put(d, '22.mp3', Buffer.concat([t22, AUDIO]));
-  const r22 = await readId3(p22);
-  assert.equal(r22.fields.title, 'Hello');
-  assert.equal(r22.writable, false);
-  await assert.rejects(writeId3(p22, { title: 'x' }), { code: 'id3v2.2' });
-
   const un = tag(3, [frame(3, 'TIT2', text(0, 'U'))], { flags: 0x80, padding: 50 });
   const pun = put(d, 'un.mp3', Buffer.concat([un, AUDIO]));
   assert.equal((await readId3(pun)).readOnlyReason, 'unsync');
@@ -225,4 +219,120 @@ test('cross-check with ffprobe and exiftool (independent readers)', { skip: !(ha
   assert.equal(e.Warning, undefined);
   // the frames we did not touch survive for the independent reader too
   assert.ok(f['id3v2_priv.owner@x'] !== undefined);
+});
+
+// ---- ID3v2.2 and cover pictures ------------------------------------------------------------------
+
+const f22 = (id, body) => { const h = Buffer.alloc(6); h.write(id, 0, 'latin1'); h.writeUIntBE(body.length, 3, 3); return Buffer.concat([h, body]); };
+const tag22 = (frames, { padding = 0, flags = 0 } = {}) => { const body = Buffer.concat([...frames, Buffer.alloc(padding)]); return Buffer.concat([Buffer.from('ID3'), Buffer.from([2, 0, flags]), syncsafe(body.length), body]); };
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600, 0x11), Buffer.from([0xff, 0xd9])]);
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(200, 0x22)]);
+
+test('v2.2: read and edit with 3-character frames, version and unknown frames kept', async () => {
+  const d = tmp();
+  const t = tag22([f22('TT2', text(0, 'Hello')), f22('TP1', text(0, 'Band')), f22('TYE', text(0, '1999')), f22('COM', Buffer.concat([Buffer.from([0]), Buffer.from('eng'), Buffer.from('\0Old comment')])),
+    f22('PIC', Buffer.concat([Buffer.from([0]), Buffer.from('JPG'), Buffer.from([3, 0]), JPEG])), f22('XYZ', Buffer.from([1, 2, 3]))], { padding: 40 });
+  const p = put(d, '22.mp3', Buffer.concat([t, AUDIO]));
+  const r = await readId3(p);
+  assert.equal(r.version, '2.2');
+  assert.equal(r.writable, true);
+  assert.equal(r.fields.title, 'Hello');
+  assert.equal(r.fields.year, '1999');
+  assert.equal(r.fields.comment, 'Old comment');
+  assert.match(r.fields.cover, /^image\/jpeg/);
+  const res = await writeId3(p, { title: 'Ciao', album: 'New album', genre: 'Rock', track: '2/9' });
+  assert.equal(res.mode, 'in-place');
+  const a = await readId3(p);
+  assert.equal(a.version, '2.2');
+  assert.deepEqual([a.fields.title, a.fields.album, a.fields.genre, a.fields.track, a.fields.artist, a.fields.year], ['Ciao', 'New album', 'Rock', '2/9', 'Band', '1999']);
+  assert.ok(a.frames.some((f) => f.id === 'XYZ'), 'unknown frame kept');
+  assert.ok(a.frames.find((f) => f.id === 'PIC').raw.equals(r.frames.find((f) => f.id === 'PIC').raw), 'picture byte for byte');
+  assert.ok(fs.readFileSync(p).subarray(a.audioOffset).equals(AUDIO));
+  // too big for the space: rewritten, still v2.2, unicode via UTF-16
+  await writeId3(p, { comment: 'x'.repeat(500), artist: '日本' });
+  const b = await readId3(p);
+  assert.equal(b.version, '2.2');
+  assert.equal(b.fields.artist, '日本');
+  assert.equal(b.fields.comment.length, 500);
+  assert.ok(fs.readFileSync(p).subarray(b.audioOffset).equals(AUDIO));
+});
+
+test('v2.2: compressed tag is read only', async () => {
+  const d = tmp();
+  const p = put(d, 'c.mp3', Buffer.concat([tag22([f22('TT2', text(0, 'x'))], { flags: 0x40, padding: 20 }), AUDIO]));
+  const r = await readId3(p);
+  assert.equal(r.readOnlyReason, 'tag-compressed');
+  await assert.rejects(writeId3(p, { title: 'y' }), { code: 'tag-compressed' });
+});
+
+test('cover: replace the front cover with a file (JPEG then PNG), other pictures kept, removal drops all', async () => {
+  const d = tmp();
+  const back = frame(3, 'APIC', Buffer.concat([Buffer.from([0]), Buffer.from('image/png\0'), Buffer.from([4]), Buffer.from('back\0'), Buffer.alloc(50, 0x33)]));
+  const t = tag(3, [frame(3, 'TIT2', text(0, 'T')), APIC(3), back], { padding: 50 });
+  const p = put(d, 'a.mp3', Buffer.concat([t, AUDIO]));
+  const jpg = path.join(d, 'new.jpg'); fs.writeFileSync(jpg, JPEG);
+  const png = path.join(d, 'new.png'); fs.writeFileSync(png, PNG);
+  const before = await readId3(p);
+  assert.equal(before.pictures, 2);
+  await writeId3(p, { cover: 'file:' + jpg });
+  let r = await readId3(p);
+  assert.equal(r.pictures, 2, 'one front cover replaced, the back cover stays');
+  assert.equal(r.cover.mime, 'image/jpeg');
+  assert.equal(r.cover.size, JPEG.length);
+  const apics = r.frames.filter((f) => f.id === 'APIC');
+  assert.ok(apics.some((f) => f.raw.equals(before.frames.find((x) => x.id === 'APIC' && x.data[0] === 0 && x.data.includes('back')).raw)), 'back cover byte for byte');
+  await writeId3(p, { cover: 'file:' + png });
+  r = await readId3(p);
+  assert.equal(r.cover.mime, 'image/png');
+  assert.equal(r.fields.title, 'T');
+  assert.ok(fs.readFileSync(p).subarray(r.audioOffset).equals(AUDIO));
+  await writeId3(p, { cover: '' });
+  r = await readId3(p);
+  assert.equal(r.fields.cover, '');
+  assert.equal(r.pictures, undefined);
+  assert.ok(!r.frames.some((f) => f.id === 'APIC'));
+});
+
+test('cover: a v2.2 file gets a PIC frame; a v2.4 file an APIC; a file with no tag a new v2.3 tag', async () => {
+  const d = tmp();
+  const jpg = path.join(d, 'c.jpg'); fs.writeFileSync(jpg, JPEG);
+  const p22 = put(d, '22.mp3', Buffer.concat([tag22([f22('TT2', text(0, 'x'))], { padding: 900 }), AUDIO]));
+  await writeId3(p22, { cover: 'file:' + jpg });
+  const r22 = await readId3(p22);
+  assert.equal(r22.version, '2.2');
+  assert.equal(r22.cover.mime, 'image/jpeg');
+  assert.ok(r22.frames.some((f) => f.id === 'PIC'));
+  const p4 = put(d, '4.mp3', Buffer.concat([tag(4, [frame(4, 'TIT2', text(3, 'x'))], { padding: 900 }), AUDIO]));
+  await writeId3(p4, { cover: 'file:' + jpg });
+  assert.equal((await readId3(p4)).cover.size, JPEG.length);
+  const p0 = put(d, '0.mp3', AUDIO);
+  await writeId3(p0, { cover: 'file:' + jpg, title: 'N' });
+  const r0 = await readId3(p0);
+  assert.equal(r0.version, '2.3');
+  assert.equal(r0.cover.type, 3);
+  assert.equal(r0.fields.title, 'N');
+});
+
+test('cover: bad files are refused and nothing changes', async () => {
+  const d = tmp();
+  const p = put(d, 'a.mp3', Buffer.concat([v3Tag({ padding: 50 }), AUDIO]));
+  const bytes = fs.readFileSync(p);
+  const txt = path.join(d, 'x.jpg'); fs.writeFileSync(txt, 'not an image at all');
+  await assert.rejects(writeId3(p, { cover: 'file:' + txt }), { code: 'cover-format' });
+  await assert.rejects(writeId3(p, { cover: 'file:' + path.join(d, 'nope.png') }), { code: 'cover-missing' });
+  await assert.rejects(writeId3(p, { cover: 'file:relative.png' }), { code: 'bad-cover' });
+  assert.ok(fs.readFileSync(p).equals(bytes));
+  assert.equal(validateField('cover', 'whatever'), 'bad-cover');
+  assert.equal(validateField('cover', ''), null);
+});
+
+test('cover: the front cover can be extracted for the preview', async () => {
+  const d = tmp();
+  const { extractCover } = await import('../src/id3.js');
+  const p = put(d, 'a.mp3', Buffer.concat([v3Tag({ padding: 50 }), AUDIO]));
+  const c = await extractCover(p);
+  assert.equal(c.mime, 'image/jpeg');
+  assert.equal(c.bytes.length, 300);
+  assert.ok(c.bytes.equals(Buffer.alloc(300, 0xab)));
+  assert.equal(await extractCover(put(d, 'b.mp3', AUDIO)), null);
 });

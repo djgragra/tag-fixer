@@ -3,24 +3,34 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-// ID3v2.3 / v2.4 editor that keeps every frame it does not edit byte for byte.
+// ID3v2.2 / v2.3 / v2.4 editor that keeps every frame it does not edit byte for byte.
 // Edited fields: title TIT2, artist TPE1, album TALB, track TRCK, genre TCON, comment COMM
-// (the one with an empty description), year TYER (v2.3) or TDRC (v2.4).
-// Not editable (shown read-only): ID3v2.2, tag-level unsynchronisation, unreadable frames.
-export const FIELD_NAMES = ['title', 'artist', 'album', 'year', 'track', 'genre', 'comment'];
-const TEXT_FRAME = { title: 'TIT2', artist: 'TPE1', album: 'TALB', track: 'TRCK', genre: 'TCON' };
+// (the one with an empty description), year TYER (v2.3) or TDRC (v2.4), and the cover picture APIC
+// (v2.2 names: TT2 TP1 TAL TRK TCO COM TYE PIC; frames have a 3-character id, a 3-byte size and no flags).
+// Not editable (shown read-only): tag-level unsynchronisation, a compressed v2.2 tag, unreadable frames.
+export const TEXT_FIELDS = ['title', 'artist', 'album', 'year', 'track', 'genre', 'comment'];
+export const FIELD_NAMES = [...TEXT_FIELDS, 'cover'];
+const TEXT_FRAME = {
+  2: { title: 'TT2', artist: 'TP1', album: 'TAL', track: 'TRK', genre: 'TCO' },
+  3: { title: 'TIT2', artist: 'TPE1', album: 'TALB', track: 'TRCK', genre: 'TCON' },
+  4: { title: 'TIT2', artist: 'TPE1', album: 'TALB', track: 'TRCK', genre: 'TCON' }
+};
+const COMMENT_ID = { 2: 'COM', 3: 'COMM', 4: 'COMM' };
+const PICTURE_ID = { 2: 'PIC', 3: 'APIC', 4: 'APIC' };
 const MAX_TAG = 32 << 20;
 const PADDING = 1024;
+export const MAX_COVER = 16 << 20;
 
 const ss = (b, o) => ((b[o] & 127) << 21) | ((b[o + 1] & 127) << 14) | ((b[o + 2] & 127) << 7) | (b[o + 3] & 127);
 const toSs = (n) => Buffer.from([(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127]);
-const yearFrame = (version) => (version === 4 ? 'TDRC' : 'TYER');
+const yearFrame = (version) => (version === 4 ? 'TDRC' : version === 2 ? 'TYE' : 'TYER');
 
 // ---- Validation (pure) ----------------------------------------------------------------------
 
 export function validateField(field, value, version = 3) {
   const v = String(value ?? '');
   if (v === '') return null;
+  if (field === 'cover') return /^file:.{1,4000}$/s.test(v) ? null : 'bad-cover';
   if (v.includes('\u0000')) return 'invalid-char';
   if (field === 'year') {
     if (version === 4) return /^\d{4}(-\d{2}(-\d{2}(T\d{2}(:\d{2}(:\d{2})?)?)?)?)?$/.test(v) ? null : 'bad-year';
@@ -64,6 +74,13 @@ function encodeText(version, s) {
 }
 
 function buildFrame(version, id, body) {
+  if (version === 2) {
+    if (body.length > 0xffffff) throw Object.assign(new Error('frame-too-big'), { code: 'frame-too-big' });
+    const h2 = Buffer.alloc(6);
+    h2.write(id, 0, 'latin1');
+    h2.writeUIntBE(body.length, 3, 3);
+    return Buffer.concat([h2, body]);
+  }
   const h = Buffer.alloc(10);
   h.write(id, 0, 'latin1');
   if (version === 4) toSs(body.length).copy(h, 4); else h.writeUInt32BE(body.length, 4);
@@ -78,7 +95,7 @@ function buildTextFrame(version, id, s) {
 function buildCommentFrame(version, s, language = 'eng') {
   const { enc, bytes } = encodeText(version, s);
   const descriptor = enc === 1 ? Buffer.from([0xff, 0xfe, 0, 0]) : enc === 0 || enc === 3 ? Buffer.from([0]) : Buffer.from([0, 0]);
-  return buildFrame(version, 'COMM', Buffer.concat([Buffer.from([enc]), Buffer.from(language, 'latin1'), descriptor, bytes]));
+  return buildFrame(version, COMMENT_ID[version], Buffer.concat([Buffer.from([enc]), Buffer.from(language, 'latin1'), descriptor, bytes]));
 }
 
 // ---- Reading --------------------------------------------------------------------------------
@@ -93,31 +110,36 @@ function readV1(buf) {
   return out;
 }
 
-// Frame list of a v2.3 / v2.4 tag body (after the extended header). Returns { frames, problem }.
+// Frame list of a v2.2 / v2.3 / v2.4 tag body (after the extended header). Returns { frames, problem }.
 function parseFrames(version, body, from, end) {
   const frames = [];
+  const idLen = version === 2 ? 3 : 4;
+  const hdr = version === 2 ? 6 : 10;
+  const idRe = version === 2 ? /^[A-Z0-9]{3}$/ : /^[A-Z0-9]{4}$/;
   let pos = from;
-  while (pos + 10 <= end) {
+  while (pos + hdr <= end) {
     if (body[pos] === 0) {
       if (body.subarray(pos, end).some((b) => b !== 0)) return { frames, problem: 'tag-garbage' };
       return { frames, padding: end - pos };
     }
-    const id = body.toString('latin1', pos, pos + 4);
-    if (!/^[A-Z0-9]{4}$/.test(id)) return { frames, problem: 'tag-garbage' };
+    const id = body.toString('latin1', pos, pos + idLen);
+    if (!idRe.test(id)) return { frames, problem: 'tag-garbage' };
     let size;
-    if (version === 4) {
+    if (version === 2) size = body.readUIntBE(pos + 3, 3);
+    else if (version === 4) {
       if ((body[pos + 4] | body[pos + 5] | body[pos + 6] | body[pos + 7]) & 128) return { frames, problem: 'tag-corrupt' };
       size = ss(body, pos + 4);
     } else size = body.readUInt32BE(pos + 4);
-    if (pos + 10 + size > end) return { frames, problem: 'tag-corrupt' };
-    frames.push({ id, flags: [body[pos + 8], body[pos + 9]], raw: body.subarray(pos, pos + 10 + size), data: body.subarray(pos + 10, pos + 10 + size) });
-    pos += 10 + size;
+    if (pos + hdr + size > end) return { frames, problem: 'tag-corrupt' };
+    frames.push({ id, flags: version === 2 ? [0, 0] : [body[pos + 8], body[pos + 9]], raw: body.subarray(pos, pos + hdr + size), data: body.subarray(pos + hdr, pos + hdr + size) });
+    pos += hdr + size;
   }
   return { frames, padding: end - pos };
 }
 
 // Flags that change how the frame data is stored: we do not edit such frames.
 const frameLocked = (version, f) => {
+  if (version === 2) return null; // v2.2 frames have no flags
   if (version === 4) return f.flags[1] & 0x4f ? 'frame-flags' : null; // grouping, compression, encryption, unsync, length indicator
   return f.flags[1] & 0xe0 ? 'frame-flags' : null; // compression, encryption, grouping
 };
@@ -165,10 +187,10 @@ export async function readId3(file) {
       const body = Buffer.alloc(tagSize);
       await fh.read(body, 0, tagSize, 10);
       res.source = 'v2';
-      if (major === 2) return readV22(res, body);
       if (flags & 0x80) res.readOnlyReason = 'unsync';
+      if (major === 2 && flags & 0x40) res.readOnlyReason = res.readOnlyReason || 'tag-compressed'; // compression bit of v2.2
       let from = 0;
-      if (flags & 0x40) { // extended header (dropped when the tag is rewritten)
+      if (major !== 2 && flags & 0x40) { // extended header (dropped when the tag is rewritten)
         const ext = major === 4 ? ss(body, 0) : 4 + body.readUInt32BE(0);
         from = Math.min(ext, tagSize);
         res.extendedHeader = true;
@@ -191,9 +213,31 @@ export async function readId3(file) {
   }
 }
 
+// A picture frame: APIC (v2.3/2.4: encoding, MIME type, picture type, description, data) or PIC (v2.2: three-letter format instead of MIME).
+function readPicture(major, frame) {
+  const d = frame.data;
+  if (d.length < 6) return null;
+  const enc = d[0];
+  let o = 1;
+  let mime;
+  if (major === 2) { mime = d.toString('latin1', 1, 4).toUpperCase(); mime = mime === 'JPG' ? 'image/jpeg' : mime === 'PNG' ? 'image/png' : mime.toLowerCase(); o = 4; }
+  else {
+    const z = d.indexOf(0, 1);
+    if (z === -1) return null;
+    mime = d.toString('latin1', 1, z);
+    o = z + 1;
+  }
+  if (o >= d.length) return null;
+  const type = d[o++];
+  const wide = enc === 1 || enc === 2;
+  while (o + (wide ? 1 : 0) < d.length && !(d[o] === 0 && (!wide || d[o + 1] === 0))) o += wide ? 2 : 1;
+  o += wide ? 2 : 1;
+  return { mime, type, size: Math.max(0, d.length - o), dataOffset: o };
+}
+
 function fillFields(res, major) {
   const byId = (id) => res.frames.find((f) => f.id === id);
-  for (const [field, id] of Object.entries(TEXT_FRAME)) {
+  for (const [field, id] of Object.entries(TEXT_FRAME[major])) {
     const f = byId(id);
     if (!f) continue;
     const lock = frameLocked(major, f);
@@ -207,7 +251,7 @@ function fillFields(res, major) {
     const lock = frameLocked(major, y);
     if (lock) res.locked.year = lock; else res.fields.year = readTextValue(y).value;
   }
-  const comm = res.frames.filter((f) => f.id === 'COMM');
+  const comm = res.frames.filter((f) => f.id === COMMENT_ID[major]);
   for (const f of comm) {
     const c = readCommentFrame(f);
     if (c && c.description === '') {
@@ -216,28 +260,15 @@ function fillFields(res, major) {
       break;
     }
   }
-}
-
-function readV22(res, body) {
-  const map = { TT2: 'title', TP1: 'artist', TAL: 'album', TYE: 'year', TRK: 'track', TCO: 'genre' };
-  let pos = 0;
-  while (pos + 6 <= body.length && body[pos] !== 0) {
-    const id = body.toString('latin1', pos, pos + 3);
-    const size = (body[pos + 3] << 16) | (body[pos + 4] << 8) | body[pos + 5];
-    if (pos + 6 + size > body.length) break;
-    const d = body.subarray(pos + 6, pos + 6 + size);
-    if (map[id] && d.length) res.fields[map[id]] = splitTerminated(d[0], d.subarray(1)).map((b) => decodeText(d[0], b)).join(' / ');
-    if (id === 'COM' && d.length > 4) {
-      const enc = d[0], rest = d.subarray(4), wide = enc === 1 || enc === 2;
-      let i = 0;
-      while (i + (wide ? 1 : 0) < rest.length && !(rest[i] === 0 && (!wide || rest[i + 1] === 0))) i += wide ? 2 : 1;
-      if (i === 0) res.fields.comment = decodeText(enc, rest.subarray(wide ? 2 : 1)).replace(/\0+$/, '');
-    }
-    pos += 6 + size;
+  const pics = res.frames.filter((f) => f.id === PICTURE_ID[major]);
+  if (pics.length) {
+    const infos = pics.map((f) => ({ f, p: readPicture(major, f) }));
+    const front = infos.find((x) => x.p && x.p.type === 3) || infos.find((x) => x.p);
+    res.pictures = infos.filter((x) => x.p).length;
+    if (front) res.cover = front.p;
+    if (infos.some((x) => frameLocked(major, x.f))) res.locked.cover = 'frame-flags';
+    res.fields.cover = front ? `${front.p.mime || '?'} · ${front.p.size < 1048576 ? Math.max(1, Math.round(front.p.size / 1024)) + ' KB' : (front.p.size / 1048576).toFixed(1) + ' MB'}${res.pictures > 1 ? ` · ${res.pictures}` : ''}` : `? · ${pics.length}`;
   }
-  res.readOnlyReason = 'id3v2.2';
-  res.writable = false;
-  return res;
 }
 
 // ---- Writing --------------------------------------------------------------------------------
@@ -257,7 +288,41 @@ async function hashRange(file, start, end) {
   return h.digest('hex');
 }
 
-// changes: { field: newValue } for the fields to change ('' removes the frame).
+// The front cover (or the first picture) of a file, for the preview. -> { mime, bytes } or null
+export async function extractCover(file, maxBytes = 8 << 20) {
+  const info = await readId3(file);
+  if (!info.hasTag || !info.cover) return null;
+  const major = Number(info.version.slice(2));
+  const pics = info.frames.filter((f) => f.id === PICTURE_ID[major]).map((f) => ({ f, p: readPicture(major, f) })).filter((x) => x.p);
+  const pick = pics.find((x) => x.p.type === 3) || pics[0];
+  if (!pick || pick.p.size > maxBytes) return null;
+  return { mime: pick.p.mime, bytes: pick.f.data.subarray(pick.p.dataOffset) };
+}
+
+// The picture behind a "file:<path>" change: JPEG or PNG, at most MAX_COVER bytes. -> { mime, bytes }
+export async function readCoverFile(token) {
+  const file = String(token || '').replace(/^file:/, '');
+  if (!path.isAbsolute(file)) throw Object.assign(new Error('bad-cover'), { code: 'bad-cover' });
+  let st;
+  try { st = await fsp.stat(file); } catch { throw Object.assign(new Error('cover-missing'), { code: 'cover-missing' }); }
+  if (!st.isFile()) throw Object.assign(new Error('bad-cover'), { code: 'bad-cover' });
+  if (st.size > MAX_COVER) throw Object.assign(new Error('cover-too-big'), { code: 'cover-too-big' });
+  const bytes = await fsp.readFile(file);
+  const mime = bytes.length > 8 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff ? 'image/jpeg'
+    : bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ? 'image/png' : null;
+  if (!mime) throw Object.assign(new Error('cover-format'), { code: 'cover-format' });
+  return { mime, bytes };
+}
+
+function buildPictureFrame(version, mime, bytes) {
+  const body = version === 2
+    ? Buffer.concat([Buffer.from([0]), Buffer.from(mime === 'image/png' ? 'PNG' : 'JPG', 'latin1'), Buffer.from([3, 0]), bytes])
+    : Buffer.concat([Buffer.from([0]), Buffer.from(mime + '\0', 'latin1'), Buffer.from([3, 0]), bytes]); // front cover, empty description
+  return buildFrame(version, PICTURE_ID[version], body);
+}
+
+// changes: { field: newValue } for the fields to change ('' removes the frame; cover: '' removes every picture,
+// 'file:<path>' puts a JPEG or PNG as the front cover and keeps the other pictures).
 export async function writeId3(file, changes) {
   const info = await readId3(file);
   if (!info.writable) throw Object.assign(new Error(info.readOnlyReason), { code: info.readOnlyReason });
@@ -277,12 +342,20 @@ export async function writeId3(file, changes) {
     if (matchIdx >= 0) { if (built) frames[matchIdx] = built; else frames[matchIdx] = null; } else if (built) frames.push(built);
   };
   for (const [field, value] of Object.entries(full)) {
-    if (field === 'comment') {
-      const idx = info.frames.findIndex((f) => f.id === 'COMM' && readCommentFrame(f)?.description === '');
+    if (field === 'cover') {
+      const pid = PICTURE_ID[version];
+      if (value === '') info.frames.forEach((f, i) => { if (f.id === pid) frames[i] = null; });
+      else {
+        const pic = await readCoverFile(value);
+        info.frames.forEach((f, i) => { if (f.id === pid && readPicture(version, f)?.type === 3) frames[i] = null; });
+        frames.push(buildPictureFrame(version, pic.mime, pic.bytes));
+      }
+    } else if (field === 'comment') {
+      const idx = info.frames.findIndex((f) => f.id === COMMENT_ID[version] && readCommentFrame(f)?.description === '');
       const lang = idx >= 0 ? readCommentFrame(info.frames[idx])?.language || 'eng' : 'eng';
       replace(idx, value === '' ? null : buildCommentFrame(version, value, /^[a-z]{3}$/.test(lang) ? lang : 'eng'));
     } else {
-      const id = field === 'year' ? yearFrame(version) : TEXT_FRAME[field];
+      const id = field === 'year' ? yearFrame(version) : TEXT_FRAME[version][field];
       replace(ids.indexOf(id), value === '' ? null : buildTextFrame(version, id, value));
     }
   }

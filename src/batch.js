@@ -2,10 +2,11 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { readBwf, writeBwf } from './bwf.js';
+import { readBwf, writeBwf, normalizeField } from './bwf.js';
 import { readId3, writeId3 } from './id3.js';
+import { readFlac, writeFlac } from './flac.js';
 
-export const TYPE_BY_EXT = { mp3: 'mp3', wav: 'wav', bwf: 'wav' };
+export const TYPE_BY_EXT = { mp3: 'mp3', wav: 'wav', bwf: 'wav', flac: 'flac' };
 const MAX_FILES = 20000;
 
 export const typeOf = (file) => TYPE_BY_EXT[path.extname(file).slice(1).toLowerCase()] || null;
@@ -15,7 +16,7 @@ export async function describeFile(p) {
   if (!type) return null;
   const st = await fsp.lstat(p);
   if (!st.isFile()) return null;
-  return { path: p, name: path.basename(p), dir: path.dirname(p), size: st.size, mtimeMs: Math.round(st.mtimeMs), type };
+  return { path: p, name: path.basename(p), dir: path.dirname(p), size: st.size, mtimeMs: Math.round(st.mtimeMs), birthtimeMs: Math.round(st.birthtimeMs || st.mtimeMs), type };
 }
 
 export async function expandPaths(paths, { recursive = false } = {}) {
@@ -55,17 +56,63 @@ export async function readTags(p) {
   try {
     if (type === 'mp3') {
       const r = await readId3(p);
-      return { kind: 'mp3', path: p, ok: true, version: r.version, source: r.source, fields: r.fields, locked: r.locked, multi: r.multi, writable: r.writable, readOnlyReason: r.readOnlyReason || null, hasTag: r.hasTag, hasV1: !!r.v1 };
+      return { kind: 'mp3', path: p, ok: true, version: r.version, source: r.source, fields: r.fields, locked: r.locked, multi: r.multi, writable: r.writable, readOnlyReason: r.readOnlyReason || null, hasTag: r.hasTag, hasV1: !!r.v1, pictures: r.pictures || 0 };
+    }
+    if (type === 'flac') {
+      const r = await readFlac(p);
+      if (!r.ok) return { kind: 'flac', path: p, ok: false, error: r.error };
+      return { kind: 'flac', path: p, ok: true, fields: r.fields, locked: r.locked, multi: r.multi, writable: r.writable, readOnlyReason: r.readOnlyReason || null, warnings: r.warnings, info: r.info, hasComment: !!r.vorbis };
     }
     if (type === 'wav') {
       const r = await readBwf(p);
       if (!r.ok) return { kind: 'wav', path: p, ok: false, error: r.error };
-      return { kind: 'wav', path: p, ok: true, fields: r.fields, nonAscii: r.nonAscii, writable: r.writable, readOnlyReason: r.readOnlyReason || null, hasBext: r.hasBext, warnings: r.warnings, info: r.info, bext: r.bext ? { version: r.bext.version, timeReference: r.bext.timeReference, umidPresent: r.bext.umidPresent, loudness: r.bext.loudness, codingHistoryLength: r.bext.codingHistoryLength || 0 } : null };
+      return { kind: 'wav', path: p, ok: true, fields: r.fields, locked: r.locked, nonAscii: r.nonAscii, writable: r.writable, readOnlyReason: r.readOnlyReason || null, hasBext: r.hasBext, hasIxml: !!r.hasIxml, hasCart: !!r.hasCart, rf64: r.rf64 ? r.rf64Kind : null, warnings: r.warnings, info: r.info, bext: r.bext ? { version: r.bext.version, timeReference: r.bext.timeReference, umidPresent: r.bext.umidPresent, loudness: r.bext.loudness, codingHistoryLength: r.bext.codingHistoryLength || 0 } : null };
     }
     return { kind: null, path: p, ok: false, error: 'unsupported' };
   } catch (err) {
     return { kind: type, path: p, ok: false, error: err.code || err.message };
   }
+}
+
+// ---- Renaming -------------------------------------------------------------------------------
+
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+// A file name the three systems accept, with the same extension as before. null = fine, otherwise a code.
+export function checkFileName(oldPath, newName) {
+  const n = String(newName ?? '');
+  if (!n || n === '.' || n === '..') return 'name-empty';
+  if (/[<>:"/\\|?*\u0000-\u001f]/.test(n)) return 'name-chars';
+  if (/[ .]$/.test(n)) return 'name-end';
+  if (Buffer.byteLength(n) > 255) return 'name-long';
+  if (RESERVED.test(n.replace(/\..*$/, ''))) return 'name-reserved';
+  if (path.extname(n).toLowerCase() !== path.extname(oldPath).toLowerCase()) return 'name-ext';
+  return null;
+}
+
+async function sameFile(a, b) {
+  try { const x = await fsp.stat(a), y = await fsp.stat(b); return x.ino === y.ino && x.dev === y.dev && x.ino !== 0; } catch { return false; }
+}
+
+// Checks a list of { path, rename } before anything is written: names, targets taken by other files,
+// two files going to the same name. -> { [path]: code }
+export async function checkRenames(items) {
+  const out = {};
+  const seen = new Map();
+  for (const it of items) {
+    if (!it.rename) continue;
+    const bad = checkFileName(it.path, it.rename);
+    if (bad) { out[it.path] = bad; continue; }
+    const target = path.join(path.dirname(it.path), it.rename);
+    const key = process.platform === 'linux' ? target : target.toLowerCase();
+    if (seen.has(key)) { out[it.path] = 'name-duplicate'; out[seen.get(key)] ||= 'name-duplicate'; continue; }
+    seen.set(key, it.path);
+    if (target !== it.path) {
+      let exists = false;
+      try { await fsp.lstat(target); exists = true; } catch { /* free */ }
+      if (exists && !(await sameFile(it.path, target))) out[it.path] = 'name-taken';
+    }
+  }
+  return out;
 }
 
 // ---- Backup folder --------------------------------------------------------------------------
@@ -96,9 +143,9 @@ export async function freeSpace(dir) {
 
 export async function preflight(items, backupRoot) {
   let bytes = 0;
-  for (const it of items) { try { bytes += (await fsp.stat(it.path)).size; } catch { /* reported when applying */ } }
+  for (const it of items) { if (!hasChanges(it)) continue; try { bytes += (await fsp.stat(it.path)).size; } catch { /* reported when applying */ } }
   const free = await freeSpace(backupRoot);
-  return { bytes, free, enough: free === null ? null : free > bytes * 1.05 + (16 << 20) };
+  return { bytes, free, enough: free === null ? null : free > bytes * 1.05 + (16 << 20), renames: await checkRenames(items) };
 }
 
 async function copyKeepTimes(src, dst, flags = 0) {
@@ -110,18 +157,26 @@ async function copyKeepTimes(src, dst, flags = 0) {
 
 // ---- Apply ----------------------------------------------------------------------------------
 
+const hasChanges = (item) => !!item.changes && Object.keys(item.changes).length > 0;
+const readerFor = (type) => (type === 'mp3' ? readId3 : type === 'flac' ? readFlac : readBwf);
+const writerFor = (type) => (type === 'mp3' ? writeId3 : type === 'flac' ? writeFlac : writeBwf);
+
 async function precheck(item) {
   const type = typeOf(item.path);
   if (!type) return 'unsupported';
-  const r = type === 'mp3' ? await readId3(item.path) : await readBwf(item.path);
+  if (!hasChanges(item)) { try { await fsp.access(item.path); return null; } catch { return 'missing'; } }
+  const r = await readerFor(type)(item.path);
   if (!r.ok) return r.error || 'unreadable';
   if (!r.writable) return r.readOnlyReason || 'read-only';
-  if (type === 'mp3') for (const f of Object.keys(item.changes)) if (r.locked[f]) return r.locked[f];
+  for (const f of Object.keys(item.changes)) if (r.locked?.[f]) return r.locked[f];
   return null;
 }
 
 function matches(read, changes) {
-  return Object.entries(changes).every(([k, v]) => (read.fields[k] ?? '') === v);
+  return Object.entries(changes).every(([k, v]) => {
+    if (k === 'cover') return v === '' ? !read.fields.cover : !!read.fields.cover;
+    return normalizeField(k, read.fields[k] ?? '') === normalizeField(k, v);
+  });
 }
 
 const tempFor = (file) => path.join(path.dirname(file), `.tagfixer-${crypto.randomBytes(5).toString('hex')}.tmp`);
@@ -139,7 +194,8 @@ export async function restoreFile(backup, target, original) {
   }
 }
 
-// items: [{ path, changes }] ; creates <backupRoot>/<batch>/files/<mirror> and manifest.json.
+// items: [{ path, changes, rename? }] ; creates <backupRoot>/<batch>/files/<mirror> and manifest.json.
+// rename: the new file name (same folder, same extension); done after the tags were written and checked.
 export async function applyBatch(items, { backupRoot, onProgress, now = new Date() }) {
   let dir = path.join(backupRoot, batchName(now));
   for (let n = 2; fs.existsSync(dir); n++) dir = path.join(backupRoot, `${batchName(now)}-${n}`);
@@ -147,36 +203,52 @@ export async function applyBatch(items, { backupRoot, onProgress, now = new Date
   const manifest = { version: 1, createdAt: now.toISOString(), entries: [] };
   const save = () => fsp.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 1), 'utf8');
   await save();
+  const renameProblems = await checkRenames(items);
 
   const results = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     onProgress?.({ index: i, total: items.length, path: item.path });
-    const res = { path: item.path, ok: false, error: null, mode: null };
+    const res = { path: item.path, ok: false, error: null, mode: null, newPath: null };
     results.push(res);
     let backup = null, before = null, wrote = false;
     try {
-      const why = await precheck(item);
+      const why = renameProblems[item.path] || await precheck(item);
       if (why) { res.error = why; continue; }
       const st = await fsp.stat(item.path);
       before = { size: st.size, mtimeMs: Math.round(st.mtimeMs), atimeMs: Math.round(st.atimeMs) };
-      backup = path.join(dir, 'files', mirrorPath(item.path));
-      await fsp.mkdir(path.dirname(backup), { recursive: true });
-      await copyKeepTimes(item.path, backup, fs.constants.COPYFILE_EXCL);
-      if ((await fsp.stat(backup)).size !== before.size) throw Object.assign(new Error('backup-size'), { code: 'backup-failed' });
+      const type = typeOf(item.path);
+      if (hasChanges(item)) {
+        backup = path.join(dir, 'files', mirrorPath(item.path));
+        await fsp.mkdir(path.dirname(backup), { recursive: true });
+        await copyKeepTimes(item.path, backup, fs.constants.COPYFILE_EXCL);
+        if ((await fsp.stat(backup)).size !== before.size) throw Object.assign(new Error('backup-size'), { code: 'backup-failed' });
 
-      wrote = true;
-      const w = typeOf(item.path) === 'mp3' ? await writeId3(item.path, item.changes) : await writeBwf(item.path, item.changes);
-      res.mode = w.mode;
-      const after = typeOf(item.path) === 'mp3' ? await readId3(item.path) : await readBwf(item.path);
-      if (!after.ok || !matches(after, item.changes)) throw Object.assign(new Error('verify-failed'), { code: 'verify-failed' });
+        wrote = true;
+        const w = await writerFor(type)(item.path, item.changes);
+        res.mode = w.mode;
+        const after = await readerFor(type)(item.path);
+        if (!after.ok || !matches(after, item.changes)) throw Object.assign(new Error('verify-failed'), { code: 'verify-failed' });
+      }
       const stAfter = await fsp.stat(item.path);
-      manifest.entries.push({ path: item.path, backup: path.relative(dir, backup), before, after: { size: stAfter.size, mtimeMs: Math.round(stAfter.mtimeMs) }, mode: w.mode, restored: false });
+      let newPath = null;
+      if (item.rename && path.join(path.dirname(item.path), item.rename) !== item.path) {
+        newPath = path.join(path.dirname(item.path), item.rename);
+        try {
+          await fsp.rename(item.path, newPath);
+        } catch (err) {
+          // the tags are written: put the original back so the file is as it was
+          if (backup) { try { await restoreFile(backup, item.path, before); res.restored = true; } catch { /* reported below */ } }
+          throw Object.assign(err, { code: err.code || 'rename-failed' });
+        }
+        res.newPath = newPath;
+      }
+      manifest.entries.push({ path: item.path, newPath, backup: backup ? path.relative(dir, backup) : null, before, after: { size: stAfter.size, mtimeMs: Math.round(stAfter.mtimeMs) }, mode: res.mode, restored: false });
       await save();
       res.ok = true;
     } catch (err) {
       res.error = err.code || err.message;
-      if (wrote && backup) { // the file may be half written: put the original back
+      if (wrote && backup && !res.restored) { // the file may be half written: put the original back
         try { await restoreFile(backup, item.path, before); res.restored = true; } catch (e2) { res.error += ' (restore failed: ' + (e2.code || e2.message) + ')'; }
       }
     }
@@ -202,10 +274,12 @@ export async function checkRestore(dir) {
   const todo = [], problems = [];
   for (const e of m.entries) {
     if (e.restored) continue;
+    const now = e.newPath || e.path; // where the file is now
     let st;
-    try { st = await fsp.stat(e.path); } catch { problems.push({ path: e.path, error: 'missing' }); continue; }
+    try { st = await fsp.stat(now); } catch { problems.push({ path: e.path, error: 'missing' }); continue; }
     if (st.size !== e.after.size || Math.round(st.mtimeMs) !== e.after.mtimeMs) { problems.push({ path: e.path, error: 'changed' }); continue; }
-    if (!fs.existsSync(path.join(dir, e.backup))) { problems.push({ path: e.path, error: 'no-backup' }); continue; }
+    if (e.backup && !fs.existsSync(path.join(dir, e.backup))) { problems.push({ path: e.path, error: 'no-backup' }); continue; }
+    if (e.newPath && fs.existsSync(e.path)) { problems.push({ path: e.path, error: 'name-taken' }); continue; }
     todo.push(e);
   }
   return { manifest: m, todo, problems, createdAt: m.createdAt };
@@ -217,9 +291,12 @@ export async function runRestore(dir) {
   const results = [];
   for (const e of c.todo) {
     try {
-      await restoreFile(path.join(dir, e.backup), e.path, e.before);
+      if (e.backup) {
+        await restoreFile(path.join(dir, e.backup), e.path, e.before);
+        if (e.newPath) await fsp.rm(e.newPath, { force: true });
+      } else await fsp.rename(e.newPath, e.path); // only renamed: nothing else changed
       e.restored = true;
-      results.push({ path: e.path, ok: true });
+      results.push({ path: e.path, ok: true, from: e.newPath || null });
     } catch (err) {
       results.push({ path: e.path, ok: false, error: err.code || err.message });
     }

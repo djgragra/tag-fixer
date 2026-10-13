@@ -26,8 +26,9 @@ export function bextData({ description = '', originator = '', originatorReferenc
   return Buffer.concat([b, Buffer.from(history, 'latin1')]);
 }
 
-// opts: bext (object or null), extra: [[id, Buffer]] placed after fmt, dataBytes, tail (bytes after the RIFF)
-export function makeWav({ bext = null, extra = [], dataBytes = 4800, tail = null, bextFirst = false } = {}) {
+// opts: bext (object or null), extra: [[id, Buffer]] placed after fmt, dataBytes, tail (bytes after the RIFF),
+// rf64: 'RF64' | 'BW64' (ds64 chunk, sizes 0xFFFFFFFF in the headers as the specification asks), bigData: pretend size of data for ds64 only
+export function makeWav({ bext = null, extra = [], dataBytes = 4800, tail = null, bextFirst = false, rf64 = null } = {}) {
   const audio = Buffer.alloc(dataBytes);
   for (let i = 0; i < dataBytes; i++) audio[i] = (i * 7 + 3) & 0xff;
   const parts = [];
@@ -35,12 +36,33 @@ export function makeWav({ bext = null, extra = [], dataBytes = 4800, tail = null
   parts.push(fmtChunk());
   if (bext && !bextFirst) parts.push(chunk('bext', bextData(bext)));
   for (const [id, data] of extra) parts.push(chunk(id, data));
-  parts.push(chunk('data', audio));
-  const body = Buffer.concat([Buffer.from('WAVE'), ...parts]);
+  const dataChunk = chunk('data', audio);
+  if (rf64) dataChunk.writeUInt32LE(0xffffffff, 4);
+  parts.push(dataChunk);
+  let body = Buffer.concat([Buffer.from('WAVE'), ...(rf64 ? [ds64Chunk({ dataSize: dataBytes })] : []), ...parts]);
+  if (rf64) { // riffSize inside ds64 = everything after the first 8 bytes
+    const ds = body.indexOf('ds64') + 8;
+    body.writeBigUInt64LE(BigInt(body.length), ds);
+  }
   const head = Buffer.alloc(8);
-  head.write('RIFF', 0, 'latin1'); head.writeUInt32LE(body.length, 4);
+  head.write(rf64 || 'RIFF', 0, 'latin1'); head.writeUInt32LE(rf64 ? 0xffffffff : body.length, 4);
   return Buffer.concat([head, body, tail || Buffer.alloc(0)]);
 }
+
+export function ds64Chunk({ riffSize = 0, dataSize = 0, sampleCount = 0, table = [] } = {}) {
+  const b = Buffer.alloc(28 + table.length * 12);
+  b.writeBigUInt64LE(BigInt(riffSize), 0); b.writeBigUInt64LE(BigInt(dataSize), 8); b.writeBigUInt64LE(BigInt(sampleCount), 16); b.writeUInt32LE(table.length, 24);
+  table.forEach(([id, size], i) => { b.write(id, 28 + i * 12, 'latin1'); b.writeBigUInt64LE(BigInt(size), 32 + i * 12); });
+  return chunk('ds64', b);
+}
+
+export const cartData = ({ title = '', artist = '', cutId = '', startDate = '', endDate = '', tagText = '' } = {}) => {
+  const b = Buffer.alloc(2048);
+  b.write('0101', 0, 'latin1'); b.write(title, 4, 64, 'latin1'); b.write(artist, 68, 64, 'latin1'); b.write(cutId, 132, 64, 'latin1');
+  b.write(startDate, 452, 10, 'latin1'); b.write(endDate, 470, 10, 'latin1');
+  b.writeInt32LE(-2300, 616); b.write('URL1', 1024 + 0 * 0, 'latin1'); // a recognisable level reference and URL
+  return Buffer.concat([b, Buffer.from(tagText, 'latin1')]);
+};
 
 // ---- MP3 and ID3 -----------------------------------------------------------------------------
 export const syncsafe = (n) => Buffer.from([(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127]);
