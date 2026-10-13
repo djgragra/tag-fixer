@@ -41,7 +41,7 @@ test('read: fields, info, version 2 loudness, coding history', async () => {
   const p = put(d, 'a.wav', makeWav({ bext: { description: 'Morning jingle', originator: 'OnAir', originatorReference: 'REF123', date: '2026-09-30', time: '07:30:15', version: 2, history: 'A=PCM,F=48000,W=16,M=stereo\r\n', loudness: { i: -23.0, r: 5.5, t: -1.2, m: -18.4, s: -20.1 }, timeReference: 4800000n } }));
   const r = await readBwf(p);
   assert.ok(r.ok && r.writable);
-  assert.deepEqual(r.fields, { description: 'Morning jingle', originator: 'OnAir', originatorReference: 'REF123', date: '2026-09-30', time: '07:30:15' });
+  assert.deepEqual(Object.fromEntries(['description', 'originator', 'originatorReference', 'date', 'time', 'codingHistory'].map((k) => [k, r.fields[k]])), { description: 'Morning jingle', originator: 'OnAir', originatorReference: 'REF123', date: '2026-09-30', time: '07:30:15', codingHistory: 'A=PCM,F=48000,W=16,M=stereo' });
   assert.equal(r.bext.version, 2);
   assert.equal(r.bext.timeReference, '4800000');
   assert.deepEqual(r.bext.loudness, { integrated: -23, range: 5.5, truePeak: -1.2, momentary: -18.4, shortTerm: -20.1 });
@@ -64,10 +64,10 @@ test('read: non-ASCII bytes are flagged, no bext gives empty fields', async () =
   assert.ok(n.writable);
 });
 
-test('read: RF64, not wav, truncated are not writable', async () => {
+test('read: RF64 without ds64, not wav, truncated are not writable', async () => {
   const d = tmp();
   const rf = makeWav(); rf.write('RF64', 0, 'latin1');
-  assert.equal((await readBwf(put(d, 'rf.wav', rf))).error, 'rf64');
+  assert.equal((await readBwf(put(d, 'rf.wav', rf))).error, 'rf64-bad');
   assert.equal((await readBwf(put(d, 'x.wav', Buffer.from('hello world, not a wave file')))).error, 'not-wav');
   const full = makeWav({ bext: { description: 'x' } });
   const t = await readBwf(put(d, 't.wav', full.subarray(0, full.length - 100)));
