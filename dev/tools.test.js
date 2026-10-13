@@ -131,6 +131,7 @@ test('checks: wav, mp3, flac and duplicates', () => {
   assert.ok(has(1, 'date-future', 'warn'));
   assert.ok(has(1, 'duplicate-reference') && has(2, 'duplicate-reference'));
   assert.ok(has(2, 'invalid-value', 'error'));
+  assert.ok(!has(2, 'date-future'), 'an impossible date is an error, not also a future date');
   assert.ok(has(3, 'no-bext') && has(3, 'damaged', 'error'));
   assert.ok(has(4, 'invalid-value', 'error') && has(4, 'spaces', 'info') && has(4, 'no-cover', 'info'));
   assert.ok(has(4, 'duplicate') && has(5, 'duplicate'), 'same title and artist, case and spaces ignored');
@@ -174,6 +175,10 @@ test('job: pattern fill / read / rename', async () => {
   const taken = await patternJob({ mode: 'rename', pattern: '{artist} - {title}', known, rows: rows.slice(1, 2) });
   assert.equal(taken.results[0].problem, 'name-taken');
   assert.equal(safeBase('a:b*c. '), 'a_b_c');
+  const blank = rowsOf(dir, ['blank.mp3']);
+  blank[0].fields = { title: ' ', artist: '' };
+  assert.equal((await patternJob({ mode: 'rename', pattern: '{artist} - {title}', known, rows: blank })).results[0].problem, 'fields-empty');
+  assert.equal((await patternJob({ mode: 'rename', pattern: '{filename} copy', known, rows: blank })).results[0].value, 'blank copy.mp3', 'a pattern with no field token is fine');
 });
 
 test('job: text and date', () => {

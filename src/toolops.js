@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { renderTemplate, extractFromName, parseTemplate } from './patterns.js';
+import { renderTemplate, extractFromName, parseTemplate, SPECIAL } from './patterns.js';
 import { applyToValues } from './textops.js';
 import { fromName, fromMtime, format } from './datefile.js';
 import { checkRenames } from './batch.js';
@@ -33,14 +33,17 @@ export async function patternJob({ mode, pattern, field, known, startAt = 1, row
     if (mode === 'rename') {
       const ext = path.extname(r.name);
       const base = safeBase(out.value);
-      results.push({ id: r.id, value: base ? base + ext : '' });
+      // a file whose tags are all empty would get a name made of separators: it is flagged instead
+      const used = parsed.parts.filter((x) => x.name && !SPECIAL.includes(x.name));
+      const empty = used.length > 0 && used.every((x) => !String(r.fields[x.name] ?? '').trim());
+      results.push({ id: r.id, value: base && !empty ? base + ext : '', empty });
     } else results.push({ id: r.id, value: out.value });
   });
   if (mode === 'read' && results.length && results.every((r) => r.error === 'ambiguous' || r.error === 'not-readable' || r.error === 'nothing-to-read')) return { error: results[0].error, results: [], bad: results.length };
   if (mode === 'rename') {
     const problems = await checkRenames(results.map((x, i) => ({ path: rows[i].path, rename: x.value && x.value !== rows[i].name ? x.value : null })));
     results.forEach((x, i) => {
-      if (!x.value) { x.problem = 'name-empty'; bad++; return; }
+      if (!x.value) { x.problem = x.empty ? 'fields-empty' : 'name-empty'; bad++; return; }
       if (x.value === rows[i].name) x.same = true;
       if (problems[rows[i].path]) { x.problem = problems[rows[i].path]; bad++; }
     });

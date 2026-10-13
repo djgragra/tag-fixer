@@ -44,7 +44,7 @@ export function runChecks(files, { now = Date.now() } = {}) {
         if (!norm(v.date)) add(f, 'info', 'date-missing', 'date');
       }
       const dm = /^(\d{4})\D(\d{2})\D(\d{2})$/.exec(v.date || '');
-      if (dm && Date.UTC(+dm[1], +dm[2] - 1, +dm[3]) > horizon) add(f, 'warn', 'date-future', 'date');
+      if (dm && validateBwf('date', v.date) === null && Date.UTC(+dm[1], +dm[2] - 1, +dm[3]) > horizon) add(f, 'warn', 'date-future', 'date');
     } else {
       if (f.kind === 'mp3') {
         if (m.source === 'none') add(f, 'warn', 'no-tag');
