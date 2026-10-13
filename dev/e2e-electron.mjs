@@ -32,15 +32,24 @@ const flacE = (() => {
   const vc = Buffer.concat([le32(3), Buffer.from('abc'), le32(2), le32(11), Buffer.from('TITLE=Hello'), le32(12), Buffer.from('ARTIST=Bandy')]);
   return Buffer.concat([Buffer.from('fLaC'), blk(0, false, si), blk(4, false, vc), blk(1, true, Buffer.alloc(200)), Buffer.alloc(900, 3)]);
 })();
-const names = { 'a.wav': wavA, 'b.wav': wavB, 'c.wav': wavC, 'd.mp3': mp3D, 'Band - Song.flac': flacE };
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(500, 0x42), Buffer.from([0xff, 0xd9])]);
+const apic = frame(3, 'APIC', Buffer.concat([Buffer.from([0]), Buffer.from('image/jpeg\0'), Buffer.from([3]), Buffer.from('\0'), Buffer.alloc(200, 0x11)]));
+const mp3E = Buffer.concat([tag(3, [frame(3, 'TIT2', text(0, 'Has cover')), apic], { padding: 100 }), audioBytes(4)]);
+const names = { 'a.wav': wavA, 'b.wav': wavB, 'c.wav': wavC, 'd.mp3': mp3D, 'e.mp3': mp3E, 'Band - Song.flac': flacE };
 for (const [n, b] of Object.entries(names)) fs.writeFileSync(path.join(dir, n), b);
 fs.writeFileSync(path.join(dir, 'notes.txt'), 'x');
+const picFile = path.join(os.tmpdir(), `tf-e2e-pic-${process.pid}.jpg`);
+fs.writeFileSync(picFile, JPEG);
+const csvFile = path.join(os.tmpdir(), `tf-e2e-${process.pid}.csv`);
+const cfgFile = path.join(os.tmpdir(), `tf-e2e-cfg-${process.pid}.json`);
 const times = new Date(2024, 4, 6, 7, 8, 9);
 fs.utimesSync(path.join(dir, 'b.wav'), times, times);
 
 const port = 9800 + Math.floor(Math.random() * 500);
-const args = ['--disable-gpu', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`];
-const child = spawn(electron, args, { stdio: 'ignore' });
+const answersFile = path.join(os.tmpdir(), `tf-e2e-answers-${process.pid}.json`);
+fs.writeFileSync(answersFile, '[]');
+const args = ['--disable-gpu', '--require', path.join(root, 'dev', 'test-dialogs.cjs'), ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), root, `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`];
+const child = spawn(electron, args, { stdio: 'ignore', env: { ...process.env, TF_DIALOG_ANSWERS: answersFile } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, what, ms = 10000) {
   const end = Date.now() + ms;
@@ -59,6 +68,8 @@ const js = async (expression) => {
 // Sets a cell the way a user would: focus, set the value, fire an input event.
 const typeCell = (name, field, value) => js(`(() => { const inp = [...document.querySelectorAll('.body .row')].find(r => r.querySelector('.name').textContent === ${JSON.stringify(name)} || r.querySelector('.meta').textContent.startsWith('was: ' + ${JSON.stringify(name)})).children[[...document.querySelectorAll('#head > div')].findIndex(h => h.textContent === ${JSON.stringify(field)})].querySelector('input'); inp.focus(); inp.value = ${JSON.stringify(value)}; inp.dispatchEvent(new Event('input', { bubbles: true })); })()`);
 const cellValues = () => js(`[...document.querySelectorAll('.body .row')].map(r => ({ name: r.querySelector('.name').textContent, v: [...r.querySelectorAll('input.cell')].map(i => i.value) }))`);
+// The native file dialogs answer from a queue (dev/test-dialogs.cjs)
+const answerDialog = async (answer) => fs.writeFileSync(answersFile, JSON.stringify([...JSON.parse(fs.readFileSync(answersFile, 'utf8')), answer]));
 const click = (sel) => js(`document.querySelector(${JSON.stringify(sel)}).click()`);
 const setVal = (sel, v, ev = 'input') => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event(${JSON.stringify(ev)}, { bubbles: true })); })()`);
 const settle = () => until(() => js(`[...document.querySelectorAll('.c-status')].every(s => !/reading/.test(s.textContent))`), 'tags read');
@@ -79,9 +90,9 @@ try {
   // 1. drop the files (and a text file that must be ignored) on the window
   const files = [...Object.keys(names), 'notes.txt'].map((n) => path.join(dir, n));
   for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp('Input.dispatchDragEvent', { type, x: 300, y: 300, data: { items: [], files, dragOperationsMask: 1 } });
-  await until(() => js(`document.getElementById('countMp3').textContent === '1' && document.getElementById('countWav').textContent === '3' && document.getElementById('countFlac').textContent === '1'`), 'files listed');
+  await until(() => js(`document.getElementById('countMp3').textContent === '2' && document.getElementById('countWav').textContent === '3' && document.getElementById('countFlac').textContent === '1'`), 'files listed');
   await settle();
-  assert.match(await js(`document.getElementById('pill').textContent`), /5 files/);
+  assert.match(await js(`document.getElementById('pill').textContent`), /6 files/);
 
   // 2. the WAV tab: three views
   await click('#tabWav');
@@ -170,9 +181,63 @@ try {
   await until(() => js(`!document.getElementById('patternDlg').open`), 'rename applied');
   assert.match(await js(`document.querySelector('.body .row .name').textContent`), /^Band - Song \(01\)\.flac$/);
 
-  // 10. MP3 tab: edit the title
+  // 10. MP3 tab: edit the title; choose a cover for all checked files; the table out to CSV and back; a saved pattern in the configuration backup
   await click('#tabMp3');
   await typeCell('d.mp3', 'Title', 'New title');
+  await click('#toolCover');
+  await answerDialog({ canceled: false, filePaths: [picFile] });
+  await click('#coverPick');
+  await until(() => js(`!document.getElementById('coverUseAll').disabled`), 'cover chosen');
+  await click('#coverUseAll');
+  await until(() => js(`!document.getElementById('coverDlg').open`), 'cover applied');
+  cells = await cellValues();
+  assert.match(cells.find((c) => c.name === 'd.mp3').v[7], /^→ tf-e2e-pic/);
+  assert.match(cells.find((c) => c.name === 'e.mp3').v[7], /^→ tf-e2e-pic/);
+
+  await click('#toolCsvOut');
+  await answerDialog({ canceled: false, filePath: csvFile });
+  await click('#csvGo');
+  await until(() => fs.existsSync(csvFile), 'csv written');
+  const csvText = fs.readFileSync(csvFile, 'utf8');
+  assert.ok(csvText.startsWith('\uFEFFpath,title,artist,album,year,track,genre,comment'));
+  assert.ok(csvText.includes('New title') && csvText.includes('Has cover'));
+  fs.writeFileSync(csvFile, csvText.replace('New title', 'Title from CSV'));
+  await click('#toolCsvIn');
+  await answerDialog({ canceled: false, filePaths: [csvFile] });
+  await click('#csvGo');
+  await until(() => js(`document.getElementById('csvGo').textContent === 'Apply'`), 'csv plan');
+  assert.match(await js(`document.getElementById('csvList').textContent`), /2 files will be updated/);
+  await click('#csvGo');
+  await until(() => js(`!document.getElementById('csvDlg').open`), 'csv applied');
+  assert.equal((await cellValues()).find((c) => c.name === 'd.mp3').v[0], 'Title from CSV');
+
+  await click('#toolPattern');
+  await setVal('#patPattern', '{artist} - {title}');
+  await setVal('#patPresetName', 'Artist and title');
+  await click('#patPresetSave');
+  await until(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).presets?.length === 1, 'preset saved');
+  await click('#patCancel');
+  await click('#settingsBtn');
+  await click('[data-stab="backup"]');
+  await answerDialog({ canceled: false, filePath: cfgFile });
+  await click('#cfgExport');
+  await until(() => fs.existsSync(cfgFile), 'configuration exported');
+  const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+  assert.deepEqual([cfg.app, cfg.version, cfg.includesSecrets, cfg.presets.length, 'backupDir' in cfg.settings], ['tag-fixer', 1, false, 1, false]);
+  await click('#settingsClose');
+  await click('#toolPattern'); // delete the preset again, then bring it back by importing the file
+  await setVal('#patPresets', cfg.presets[0].id, 'change');
+  await click('#patPresetDel');
+  await until(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).presets.length === 0, 'preset deleted');
+  await click('#patCancel');
+  await click('#settingsBtn');
+  await click('[data-stab="backup"]');
+  await answerDialog({ canceled: false, filePaths: [cfgFile] });
+  await click('#cfgImport');
+  await until(() => js(`!document.getElementById('cfgChoose').hidden`), 'import choice');
+  await click('#cfgApply');
+  await until(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).presets.length === 1, 'preset imported');
+  await click('#settingsClose');
 
   // 11. check files: lists problems, clicking a line goes to the file
   await click('#toolCheck');
@@ -180,13 +245,13 @@ try {
   await click('#checkClose');
 
   // 12. save everything: confirm dialog, backups, results (5 files)
-  assert.match(await js(`document.querySelector('#saveBtn').textContent`), /5/);
+  assert.match(await js(`document.querySelector('#saveBtn').textContent`), /6/);
   await click('#saveBtn');
   await until(() => js(`document.getElementById('confirmDlg').open && !document.getElementById('confirmOk').disabled`), 'confirm dialog');
   assert.equal(await js(`document.getElementById('confirmDir').textContent`), backups);
   await click('#confirmOk');
   await until(() => js(`document.getElementById('resultDlg').open`), 'result dialog');
-  assert.match(await js(`document.getElementById('resultText').textContent`), /5 saved/);
+  assert.match(await js(`document.getElementById('resultText').textContent`), /6 saved/);
   await click('#resultClose');
 
   // 13. the files on disk
@@ -204,8 +269,10 @@ try {
   assert.equal(c.fields.cartTitle, 'Cart one');
   assert.equal(c.fields.codingHistory, 'A=PCM,F=48000,W=16,M=stereo');
   const d = await readId3(path.join(dir, 'd.mp3'));
-  assert.equal(d.fields.title, 'New title');
+  assert.equal(d.fields.title, 'Title from CSV');
   assert.equal(d.fields.artist, 'Old artist');
+  assert.equal(d.cover.size, JPEG.length);
+  assert.equal((await readId3(path.join(dir, 'e.mp3'))).cover.size, JPEG.length, 'the front cover of the other file was replaced');
   assert.ok(d.frames.some((f) => f.id === 'PRIV'));
   assert.ok(fs.readFileSync(path.join(dir, 'd.mp3')).subarray(d.audioOffset).equals(audioBytes(4)));
   assert.ok(fs.existsSync(path.join(dir, 'Band - Song (01).flac')), 'the FLAC file was renamed');
@@ -213,13 +280,13 @@ try {
   const f = await readFlac(path.join(dir, 'Band - Song (01).flac'));
   assert.deepEqual([f.fields.title, f.fields.artist], ['Song', 'Band']);
   assert.ok(fs.readFileSync(path.join(dir, 'Band - Song (01).flac')).subarray(f.audioOffset).equals(flacE.subarray(flacE.length - 900)), 'FLAC audio untouched');
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song (01).flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'notes.txt'], 'no temporary files left');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song (01).flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'e.mp3', 'notes.txt'], 'no temporary files left');
 
   // 14. the backup holds the originals
   const batch = fs.readdirSync(backups).filter((n) => /^\d{4}-\d{2}-\d{2}_\d{6}/.test(n));
   assert.equal(batch.length, 1);
   const mf = JSON.parse(fs.readFileSync(path.join(backups, batch[0], 'manifest.json'), 'utf8'));
-  assert.equal(mf.entries.length, 5);
+  assert.equal(mf.entries.length, 6);
   assert.ok(fs.readFileSync(path.join(backups, batch[0], mf.entries.find((e) => e.path.endsWith('a.wav')).backup)).equals(wavA));
 
   // 15. restore the batch: the original bytes and names come back
@@ -227,10 +294,10 @@ try {
   await click('#restoreBtn');
   await until(() => js(`document.getElementById('restoreDlg').open && !document.getElementById('restoreOk').disabled`), 'restore dialog');
   await click('#restoreOk');
-  await until(() => ['a.wav', 'b.wav', 'c.wav', 'd.mp3', 'Band - Song.flac'].every((n) => fs.existsSync(path.join(dir, n)) && fs.readFileSync(path.join(dir, n)).equals(names[n])), 'originals restored');
+  await until(() => ['a.wav', 'b.wav', 'c.wav', 'd.mp3', 'e.mp3', 'Band - Song.flac'].every((n) => fs.existsSync(path.join(dir, n)) && fs.readFileSync(path.join(dir, n)).equals(names[n])), 'originals restored');
   await click('#tabWav');
   await until(() => js(`[...document.querySelectorAll('.body .row')][0].querySelector('input.cell').value === 'old description'`), 'table refreshed');
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song.flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'notes.txt']);
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['Band - Song.flac', 'a.wav', 'b.wav', 'c.wav', 'd.mp3', 'e.mp3', 'notes.txt']);
 
   // 16. settings: the tabs, the language, the configuration backup box, About
   await click('#settingsBtn');
@@ -251,5 +318,6 @@ try {
   ws?.close();
   child.kill();
   await sleep(300);
+  for (const f of [picFile, csvFile, cfgFile, answersFile]) fs.rmSync(f, { force: true });
   for (const d of [dir, userData, backups]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 });
 }
