@@ -139,3 +139,52 @@ test('checks: wav, mp3, flac and duplicates', () => {
   assert.ok(has(7, 'unreadable', 'error'));
   assert.ok(!has(2, 'empty-description'));
 });
+
+// ---- the jobs behind the dialogs -----------------------------------------------------------------------------
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { patternJob, textJob, dateJob, safeBase } from '../src/toolops.js';
+
+const rowsOf = (dir, names) => names.map((n, i) => { const p = path.join(dir, n); fs.writeFileSync(p, 'x'); return { id: i + 1, path: p, name: n, dir, fields: { title: 'T' + i, artist: 'A' + i }, mtimeMs: new Date(2026, 9, 13, 8, i, 0).getTime() }; });
+
+test('job: pattern fill / read / rename', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-job-'));
+  const rows = rowsOf(dir, ['a.mp3', 'b.mp3', 'c.mp3']);
+  const known = ['title', 'artist'];
+  const fill = await patternJob({ mode: 'fill', pattern: '{n:2}. {artist} - {title}', field: 'title', known, rows });
+  assert.deepEqual(fill.results.map((r) => r.value), ['01. A0 - T0', '02. A1 - T1', '03. A2 - T2']);
+  assert.equal((await patternJob({ mode: 'fill', pattern: '{zz}', field: 'title', known, rows })).error, 'unknown-token');
+  assert.equal((await patternJob({ mode: 'fill', pattern: '{title}', field: 'nope', known, rows })).error, 'no-field');
+  assert.equal((await patternJob({ mode: 'fill', pattern: ' ', field: 'title', known, rows })).error, 'empty');
+
+  const named = rowsOf(dir, ['Band - Song.mp3', 'no separator.mp3']);
+  const read = await patternJob({ mode: 'read', pattern: '{artist} - {title}', known, rows: named });
+  assert.deepEqual(read.results[0].values, { artist: 'Band', title: 'Song' });
+  assert.equal(read.results[1].error, 'no-match');
+  assert.equal(read.bad, 1);
+
+  const ren = await patternJob({ mode: 'rename', pattern: '{artist} - {title}', known, rows });
+  assert.deepEqual(ren.results.map((r) => r.value), ['A0 - T0.mp3', 'A1 - T1.mp3', 'A2 - T2.mp3']);
+  const bad = await patternJob({ mode: 'rename', pattern: 'x', known, rows });
+  assert.ok(bad.results.every((r) => r.problem === 'name-duplicate') || bad.bad >= 2, 'three files to one name');
+  const slash = await patternJob({ mode: 'rename', pattern: '{title}/{artist}?', known, rows: rows.slice(0, 1) });
+  assert.equal(slash.results[0].value, 'T0_A0_.mp3', 'forbidden characters become _');
+  fs.writeFileSync(path.join(dir, 'A1 - T1.mp3'), 'other');
+  const taken = await patternJob({ mode: 'rename', pattern: '{artist} - {title}', known, rows: rows.slice(1, 2) });
+  assert.equal(taken.results[0].problem, 'name-taken');
+  assert.equal(safeBase('a:b*c. '), 'a_b_c');
+});
+
+test('job: text and date', () => {
+  const t = textJob({ op: { type: 'upper' }, rows: [{ id: 1, value: 'a' }, { id: 2, value: 'B' }] });
+  assert.deepEqual(t.results, [{ id: 1, value: 'A', changed: true }, { id: 2, value: 'B', changed: false }]);
+  assert.equal(t.changed, 1);
+  assert.equal(textJob({ op: { type: 'find', find: '(', regex: true }, rows: [] }).error, 'bad-regex');
+  const rows = [{ id: 1, name: '2026-10-13_0830_x.wav', mtimeMs: new Date(2020, 0, 2, 3, 4, 5).getTime() }, { id: 2, name: 'plain.wav', mtimeMs: new Date(2020, 0, 2, 3, 4, 5).getTime() }];
+  const d = dateJob({ source: 'name', target: 'bext', rows }).results;
+  assert.deepEqual([d[0].date, d[0].time, d[0].from], ['2026-10-13', '08-30-00', 'name']);
+  assert.deepEqual([d[1].date, d[1].time, d[1].from], ['2020-01-02', '03-04-05', 'mtime']);
+  const c = dateJob({ source: 'mtime', target: 'cart-start', withTime: false, rows }).results;
+  assert.deepEqual([c[0].date, c[0].time], ['2020/01/02', null]);
+});

@@ -232,7 +232,7 @@ function readPicture(major, frame) {
   const wide = enc === 1 || enc === 2;
   while (o + (wide ? 1 : 0) < d.length && !(d[o] === 0 && (!wide || d[o + 1] === 0))) o += wide ? 2 : 1;
   o += wide ? 2 : 1;
-  return { mime, type, size: Math.max(0, d.length - o) };
+  return { mime, type, size: Math.max(0, d.length - o), dataOffset: o };
 }
 
 function fillFields(res, major) {
@@ -286,6 +286,17 @@ async function hashRange(file, start, end) {
     });
   }
   return h.digest('hex');
+}
+
+// The front cover (or the first picture) of a file, for the preview. -> { mime, bytes } or null
+export async function extractCover(file, maxBytes = 8 << 20) {
+  const info = await readId3(file);
+  if (!info.hasTag || !info.cover) return null;
+  const major = Number(info.version.slice(2));
+  const pics = info.frames.filter((f) => f.id === PICTURE_ID[major]).map((f) => ({ f, p: readPicture(major, f) })).filter((x) => x.p);
+  const pick = pics.find((x) => x.p.type === 3) || pics[0];
+  if (!pick || pick.p.size > maxBytes) return null;
+  return { mime: pick.p.mime, bytes: pick.f.data.subarray(pick.p.dataOffset) };
 }
 
 // The picture behind a "file:<path>" change: JPEG or PNG, at most MAX_COVER bytes. -> { mime, bytes }

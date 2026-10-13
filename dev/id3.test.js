@@ -325,3 +325,14 @@ test('cover: bad files are refused and nothing changes', async () => {
   assert.equal(validateField('cover', 'whatever'), 'bad-cover');
   assert.equal(validateField('cover', ''), null);
 });
+
+test('cover: the front cover can be extracted for the preview', async () => {
+  const d = tmp();
+  const { extractCover } = await import('../src/id3.js');
+  const p = put(d, 'a.mp3', Buffer.concat([v3Tag({ padding: 50 }), AUDIO]));
+  const c = await extractCover(p);
+  assert.equal(c.mime, 'image/jpeg');
+  assert.equal(c.bytes.length, 300);
+  assert.ok(c.bytes.equals(Buffer.alloc(300, 0xab)));
+  assert.equal(await extractCover(put(d, 'b.mp3', AUDIO)), null);
+});

@@ -9,7 +9,7 @@ export const PRESET_KINDS = ['fill', 'read', 'rename'];
 const TABS = ['mp3', 'wav', 'flac'];
 const WAV_SETS = ['bwf', 'ixml', 'cart'];
 // kept on this PC only: not part of a backup file
-export const RUNTIME_KEYS = ['updateState', 'lastSeenVersion', 'window', 'backupDir', 'migrated'];
+export const RUNTIME_KEYS = ['updateState', 'lastSeenVersion', 'backupDir', 'migrated'];
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -37,8 +37,6 @@ export function sanitizeSettings(raw, { defaultBackupDir = null } = {}) {
   }
   const us = isObj(r.updateState) ? r.updateState : {};
   const lc = isObj(us.lastCheck) ? us.lastCheck : null;
-  const w = isObj(r.window) ? r.window : {};
-  const num = (v) => (Number.isFinite(v) ? Math.round(v) : undefined);
   return {
     language: LANGS.includes(r.language) ? r.language : 'en', // the app always opens in English until the user changes it
     theme: ['auto', 'light', 'dark'].includes(r.theme) ? r.theme : 'auto',
@@ -55,8 +53,7 @@ export function sanitizeSettings(raw, { defaultBackupDir = null } = {}) {
       skipVersion: str(us.skipVersion, 40),
       remindUntil: Number.isFinite(us.remindUntil) ? us.remindUntil : 0,
       lastCheck: lc ? { at: Number.isFinite(lc.at) ? lc.at : 0, ok: lc.ok === true, error: str(lc.error, 200) } : null
-    },
-    window: { x: num(w.x), y: num(w.y), width: num(w.width), height: num(w.height), maximized: w.maximized === true }
+    }
   };
 }
 

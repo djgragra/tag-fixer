@@ -18,7 +18,7 @@ const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'tf-g-'));
 
 const sample = () => sanitizeSettings({
   language: 'it', theme: 'dark', recursive: true, checkUpdates: false, tab: 'wav', wavSet: 'cart', backupDir: '/data/backups', lastSeenVersion: '26.10.1',
-  updateState: { skipVersion: '26.10.9', remindUntil: 5, lastCheck: { at: 1, ok: true, error: '' } }, window: { x: 1, y: 2, width: 900, height: 700 },
+  updateState: { skipVersion: '26.10.9', remindUntil: 5, lastCheck: { at: 1, ok: true, error: '' } },
   presets: [{ id: 'a1', name: 'Artist - Title', kind: 'read', pattern: '{artist} - {title}' }, { id: 'a2', name: 'Name from tags', kind: 'rename', pattern: '{n:2} {artist}' }]
 }, { defaultBackupDir: '/home/me/TagFixer Backups' });
 
@@ -60,14 +60,14 @@ test('backup: the file has the common shape, nothing that stays on this PC, no s
   assert.equal(f.includesSecrets, false);
   assert.equal(f.emptiedSecrets, undefined);
   assert.equal(backupFileName(Date.UTC(2026, 9, 13)), 'tag-fixer-backup-2026-10-13.json');
-  for (const k of ['lastSeenVersion', 'updateState', 'window', 'backupDir', 'migrated', 'presets']) assert.ok(!(k in f.settings), k);
+  for (const k of ['lastSeenVersion', 'updateState', 'backupDir', 'migrated', 'presets']) assert.ok(!(k in f.settings), k);
   assert.equal(f.settings.language, 'it');
   assert.equal(f.presets.length, 2);
 });
 
 test('backup import: replace takes settings and presets, keeps this PC\'s own memory and backup folder', () => {
   const file = buildExport(sample());
-  const cur = sanitizeSettings({ language: 'en', lastSeenVersion: '26.10.2', backupDir: '/mine', window: { width: 800 } });
+  const cur = sanitizeSettings({ language: 'en', lastSeenVersion: '26.10.2', backupDir: '/mine' });
   const r = prepareImport(JSON.stringify(file), cur);
   assert.equal(r.ok, true);
   assert.deepEqual(r.missing, []);
@@ -76,7 +76,6 @@ test('backup import: replace takes settings and presets, keeps this PC\'s own me
   assert.equal(r.settings.presets.length, 2);
   assert.equal(r.settings.backupDir, '/mine');
   assert.equal(r.settings.lastSeenVersion, '26.10.2');
-  assert.equal(r.settings.window.width, 800);
 });
 
 test('backup import: add-only adds the presets this PC does not have and touches nothing else; wrong files refused', () => {
