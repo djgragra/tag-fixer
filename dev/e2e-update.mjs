@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const electron = path.join(root, 'node_modules', '.bin', 'electron');
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; // the version of the app under test
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tf-upd-'));
 const userData = path.join(tmp, 'ud'), home = path.join(tmp, 'home');
 fs.mkdirSync(userData); fs.mkdirSync(path.join(home, 'Downloads'), { recursive: true });
@@ -75,7 +76,7 @@ try {
   await until(() => settingsJson().updateState.remindUntil > Date.now(), 'remind saved');
   await js(`document.getElementById('settingsBtn').click()`);
   await js(`document.querySelector('[data-stab="updates"]').click()`);
-  assert.match(await js(`document.getElementById('updText').textContent`), /Version 99\.0\.0 is available \(you have 26\.10\.2\)/);
+  assert.match(await js(`document.getElementById('updText').textContent`), new RegExp(`Version 99\\.0\\.0 is available \\(you have ${APP_VERSION.replaceAll('.', '\\.')}\\)`));
   assert.match(await js(`document.getElementById('updLast').textContent`), /Last check: .*\(ok\)/);
 
   // 3. a wrong checksum: the download is refused and no file is left
@@ -97,9 +98,9 @@ try {
 
   // 5. close and install: the safety copy of the settings is made first (Linux then only shows the file)
   await js(`document.getElementById('updInstall').click()`);
-  await until(() => fs.existsSync(path.join(userData, 'backups', 'pre-update-26.10.2.json')), 'safety copy');
+  await until(() => fs.existsSync(path.join(userData, 'backups', `pre-update-${APP_VERSION}.json`)), 'safety copy');
   await until(() => js(`/AppImage is shown/.test(document.querySelector('.toast')?.textContent || '')`), 'Linux hint');
-  assert.equal(fs.readFileSync(path.join(userData, 'backups', 'pre-update-26.10.2.json'), 'utf8').includes('"language"'), true);
+  assert.equal(fs.readFileSync(path.join(userData, 'backups', `pre-update-${APP_VERSION}.json`), 'utf8').includes('"language"'), true);
 
   // 6. skip this version: saved, and the banner stays away
   await js(`document.getElementById('settingsClose').click()`);

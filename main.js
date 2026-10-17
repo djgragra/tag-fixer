@@ -14,7 +14,7 @@ import { runChecks } from './src/checks.js';
 import { toCsv, parseCsv, planImport } from './src/csv.js';
 import { createStore, sanitizeSettings } from './src/settings.js';
 import { buildExport, prepareImport, backupFileName } from './src/backup.js';
-import { checkForUpdate, downloadInstaller, bannerState, remindLaterState, skipVersionState, makeSafetyCopy, installPlan, whatsNew, startupKind } from './src/updater.js';
+import { checkForUpdate, downloadInstaller, sweepPartials, bannerState, remindLaterState, skipVersionState, makeSafetyCopy, installPlan, whatsNew, startupKind } from './src/updater.js';
 import { createLogger } from './src/logs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -87,6 +87,8 @@ app.whenReady().then(() => {
   logger = createLogger({ dir: path.join(userData(), 'logs'), retentionDays: settings().logRetentionDays });
   logger.prune();
   logger.log('info', `Tag Fixer ${app.getVersion()} started (${process.platform} ${process.arch}, Electron ${process.versions.electron})`);
+  const stale = sweepPartials(app.getPath('downloads'));
+  if (stale.length) logger.log('info', `removed ${stale.length} unfinished installer download(s) left by an earlier run`);
   startKind = startupKind(settings().lastSeenVersion, app.getVersion(), hadSettingsFile);
   if (startKind === 'first') store.update({ lastSeenVersion: app.getVersion() });
   else if (startKind === 'updated' && Notification.isSupported()) new Notification({ title: 'Tag Fixer', body: txt().updatedTo(app.getVersion()) }).show();
@@ -383,6 +385,7 @@ ipcMain.handle('update:download', async () => {
   if (!lastUpdateInfo?.available) return { ok: false, error: 'no-update' };
   if (downloadAbort) return { ok: false, error: 'busy' };
   downloadAbort = new AbortController();
+  sweepPartials(app.getPath('downloads')); // a .part left by a download that was cut off earlier goes first
   try {
     downloadedFile = await downloadInstaller({ info: lastUpdateInfo, dir: app.getPath('downloads'), fetchFn: net.fetch, current: app.getVersion(), signal: downloadAbort.signal, onProgress: (received, total) => send('update:progress', received, total) });
     downloadedFor = lastUpdateInfo.latest;
@@ -391,7 +394,7 @@ ipcMain.handle('update:download', async () => {
   } catch (err) {
     downloadedFile = null;
     downloadedFor = null;
-    const cancelled = downloadAbort?.signal.aborted;
+    const cancelled = downloadAbort?.signal.aborted || err.cancelled;
     if (!cancelled) logger.log('warn', `update download failed: ${err.message}`);
     return { ok: false, error: cancelled ? 'cancelled' : err.message };
   } finally { downloadAbort = null; }

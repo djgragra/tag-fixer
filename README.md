@@ -72,7 +72,7 @@ No measurements. The rules come from these documents; "status" says how far each
 
 ## Validation and references
 
-Results of this release (26.10.2), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`ffprobe` / `ffmpeg`) as the independent reader. This is not a certified tool.
+Results of this release (26.10.3), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`ffprobe` / `ffmpeg`) as the independent reader. This is not a certified tool.
 
 | Reference | What it validates | Result | How to re-run |
 |---|---|---|---|
@@ -84,7 +84,8 @@ Results of this release (26.10.2), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`
 | `dev/batch.test.js` | backup, restore (bytes, modification time, names), rename (taken name, duplicates, case-only, rename only), a locked field stops a file before any backup, every format in one batch | pass | `npm test` |
 | `dev/tools.test.js` | patterns, text operations, dates from names, CSV (quotes, delimiters, formula protection, import plan), checks, the jobs behind the dialogs | pass | `npm test` |
 | `dev/guided.test.js` | settings, configuration backup (replace / add, wrong files), update check with a fake GitHub, SHA-256 check and cleanup, remind / skip, safety copy, install plan, What's new, log rotation, `CLAUDE.md` | pass | `npm test` |
-| `dev/i18n.test.js` | the same keys in English, Italian and Spanish; every key the window uses and every error code has a text | pass | `npm test` |
+| `dev/updater.test.js` | the shared `updater` module, version 2: a download that fails, is cancelled, stalls, fails the checksum or fails at the final rename leaves no `.part` file; `.part` files left by an earlier run are swept; nothing else in the folder is touched | pass | `npm test` |
+| `dev/i18n.test.js` | the same keys in English, Italian and Spanish; every key the window uses and every error code has a text; the tip jar box (text in three languages, the support page of the app's language, allowed link, image shipped) | pass | `npm test` |
 | `dev/e2e-electron.mjs` (real app, DevTools protocol, native dialogs answered by `dev/test-dialogs.cjs`) | drop files of every type, edit cells, invalid values block saving, Convert to ASCII, undo / redo, tools (date, history, find, pattern read and rename, cover, CSV out and in, saved pattern, configuration backup out and in), check list, save of 6 files with renames, backup, restore, settings, language | pass | `node dev/e2e-electron.mjs` |
 | `dev/e2e-update.mjs` (real app against a fake GitHub on localhost) | update banner, remind later saved, a wrong SHA-256 is refused and leaves no file, real download with progress, verified file, safety copy before "Close and install" (Linux shows the file) | pass | `node dev/e2e-update.mjs` (needs `openssl`) |
 
@@ -140,7 +141,7 @@ Release files go to a GitHub release with a `SHA256SUMS.txt`. The update check e
 - `renderer/` — interface (strict CSP, no inline script or style, no external resources); `i18n.js` has the three languages.
 - `assets/` — icons, generated from `assets/logo.svg` with `dev/make-icons.mjs`. `docs/screenshots/` — screenshots. `dev/` — tests, end-to-end scripts and tools.
 
-Versions are `YY.M.N` (e.g. `26.10.2`), tags `v26.10.2`. The version lives in `package.json`; `CHANGELOG.md` is packaged with the app (the *What's new* window reads it). `CLAUDE.md` points to the standard this app is built under.
+Versions are `YY.M.N` (e.g. `26.10.3`), tags `v26.10.3`. The version lives in `package.json`; `CHANGELOG.md` is packaged with the app (the *What's new* window reads it). `CLAUDE.md` points to the standard this app is built under.
 
 ## Credits
 
