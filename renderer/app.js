@@ -1326,6 +1326,7 @@
   }
   $("helpBtn").addEventListener("click", function () { openDlg("helpDlg"); });
   $("helpClose").addEventListener("click", function () { closeDlg("helpDlg"); });
+  $("aboutTip").addEventListener("click", function () { api.openExternal(t("about.tipUrl")); });
   document.querySelectorAll("a[data-ext]").forEach(function (a) { a.addEventListener("click", function (e) { e.preventDefault(); if (/^https:/.test(a.href)) api.openExternal(a.href); }); });
 
   // ---- Start -------------------------------------------------------------------------------

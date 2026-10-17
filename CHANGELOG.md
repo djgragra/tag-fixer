@@ -1,5 +1,11 @@
 # Changelog
 
+## 26.10.3 — 2026-10-17
+
+- **Guided update, safer download**: the shared `updater` module is now fully version 2. An installer download that fails, is cancelled, stalls or fails its checksum no longer leaves a `.part` file in the Downloads folder (the file is closed before it is deleted, which Windows requires), and `.part` files left by an earlier run are removed when the app starts and before a new download.
+- **Dependencies**: Electron 44.9.0 (from 44.5.1) and the npm packages updated within their current major versions.
+- **Tip jar**: Help & About has a small box with the tip jar and one button that opens the tip page of onairgarage.com in your browser, in the language of the app. Nothing else changes: no pop-ups, no reminders.
+
 ## 26.10.2 — 2026-10-13
 
 - **New formats**: FLAC (title, artist, album, date, track, genre and comment as Vorbis comments, the audio never moved or changed), **RF64 / BW64** WAV files over 4 GB, and **ID3v2.2** tags, which can now be edited like v2.3 and v2.4 (they were read-only).

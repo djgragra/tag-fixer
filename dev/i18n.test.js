@@ -80,3 +80,19 @@ test('every error code the engine can throw has a text', async () => {
   const missing = [...codes].filter((c) => !known(c) && !['unknown-field', 'tag-corrupt'].includes(c));
   assert.deepEqual(missing, []);
 });
+
+test('tip jar box: text, button and the support page in the app\'s language; the link is allowed to open; the image ships', () => {
+  const urls = { en: 'https://onairgarage.com/support/', it: 'https://onairgarage.com/it/support/', es: 'https://onairgarage.com/es/support/' };
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const allowed = new RegExp(main.match(/const EXTERNAL_OK = \/(.*)\/;/)[1]);
+  for (const l of ['en', 'it', 'es']) {
+    assert.equal(STRINGS[l]['about.tipUrl'], urls[l]);
+    assert.match(STRINGS[l]['about.tip'], /\S/);
+    assert.match(STRINGS[l]['about.tipBtn'], /\S/);
+    assert.ok(allowed.test(urls[l]), `${l} link is allowed by EXTERNAL_OK`);
+  }
+  assert.ok(html.includes('id="aboutTip"') && html.includes('src="img/tip-jar.png"'));
+  assert.ok(app.includes('api.openExternal(t("about.tipUrl"))'));
+  assert.ok(fs.existsSync(path.join(root, 'renderer', 'img', 'tip-jar.png')));
+  assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).build.files.includes('renderer/**/*'));
+});

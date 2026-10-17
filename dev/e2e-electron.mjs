@@ -90,7 +90,7 @@ try {
   // 0. the first start after an update shows What's new once (the version before was 26.10.1)
   await until(() => js(`document.getElementById('whatsNewDlg').open`), "What's new");
   assert.match(await js(`document.getElementById('whatsNewTitle').textContent`), /What's new in 26\.10\./);
-  assert.ok(await js(`document.querySelectorAll('#whatsNewList li').length >= 5`));
+  assert.ok(await js(`document.querySelectorAll('#whatsNewList li').length >= 3`));
   await click('#whatsNewOk');
   await until(() => js(`!document.getElementById('whatsNewDlg').open`), "What's new closed");
   await until(() => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).lastSeenVersion === JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version, 'version remembered');

@@ -2,6 +2,11 @@
 // Guided update: asks GitHub for the latest release of the public repository, downloads the installer for
 // this system on request, checks it against the release's SHA256SUMS.txt and says how to install it.
 // Nothing is installed without a click. Electron-free: fetch and version are injected, so it can be tested.
+//
+// Version 2 (first in G-Clock 26.10.3, here in 26.10.3) differs from version 1 in how an interrupted download is cleaned up: the
+// "<name>.part" file is closed *before* it is deleted (Windows refuses to delete an open file, which left
+// the .part behind), a cancelled, stalled or failed download always removes it, and `sweepPartials` removes
+// the ones an earlier run left when the app was closed in the middle of a download.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +15,7 @@ export const REPO = 'djgragra/tag-fixer';
 export const PRODUCT = 'Tag-Fixer';
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 const DAY = 86_400_000;
+const STALL_MS = 60_000; // no byte for this long: the download is given up and cleaned up
 
 function parts(v) {
   return String(v || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -79,62 +85,125 @@ export async function checkForUpdate({ repo = REPO, current, fetchFn }) {
   }
 }
 
-const closeStream = (stream) => new Promise((resolve) => { if (stream.closed) resolve(); else { stream.once('close', resolve); stream.destroy(); } });
+const PARTIAL_RE = new RegExp(`^${PRODUCT}-.+\\.part$`, 'i');
 
-// Written as "<name>.part"; it gets its real name only when the checksum matches, otherwise it is deleted.
-export async function downloadInstaller({ info, dir, fetchFn, current, onProgress, signal }) {
+// Removes the "G-Clock-….part" files left in `dir` by a download that was interrupted (app closed, power cut).
+// Call it when the app starts and before a new download; never while a download of this process is running.
+export function sweepPartials(dir) {
+  const removed = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return removed;
+  }
+  for (const n of names) {
+    if (!PARTIAL_RE.test(n)) continue;
+    try {
+      fs.rmSync(path.join(dir, n), { force: true });
+      removed.push(n);
+    } catch {
+      /* in use by another process: left alone */
+    }
+  }
+  return removed;
+}
+
+// Deletes a file, trying again a few times: on Windows a file that was just closed can stay locked for a moment
+// (virus scanner, indexer).
+async function removeFile(file, tries = 8) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      fs.rmSync(file, { force: true });
+      return true;
+    } catch {
+      await new Promise((r) => setTimeout(r, 100 * (i + 1)));
+    }
+  }
+  return !fs.existsSync(file);
+}
+
+const closed = (stream) => new Promise((resolve) => {
+  if (stream.closed) return resolve();
+  stream.once('close', resolve);
+  stream.destroy();
+});
+
+// Written as "<name>.part"; it gets its real name only when the checksum matches, otherwise it is deleted
+// (checksum mismatch, network error, cancel, stall, a rename that fails): nothing named .part is left behind.
+export async function downloadInstaller({ info, dir, fetchFn, current, onProgress, signal, stallMs = STALL_MS }) {
   if (!info?.installer) throw new Error('no-installer');
   if (!info.sumsUrl) throw new Error('no-checksums');
   const { name, url } = info.installer;
   const headers = { 'User-Agent': `${PRODUCT}/${current}` };
+  const cancelled = () => Object.assign(new Error('cancelled'), { cancelled: true });
+  const guard = (err) => (signal?.aborted ? cancelled() : err);
 
-  const sumsRes = await fetchFn(info.sumsUrl, { headers, signal: signal ?? AbortSignal.timeout(30_000) });
-  if (!sumsRes.ok) throw new Error(`SHA256SUMS.txt: HTTP ${sumsRes.status}`);
-  const line = (await sumsRes.text()).split('\n').map((l) => l.trim().split(/\s+\*?/)).find((p) => p[1] === name);
-  if (!line || !/^[0-9a-f]{64}$/i.test(line[0])) throw new Error('no-checksums');
-  const expected = line[0].toLowerCase();
+  let expected;
+  try {
+    const sumsRes = await fetchFn(info.sumsUrl, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) });
+    if (!sumsRes.ok) throw new Error(`SHA256SUMS.txt: HTTP ${sumsRes.status}`);
+    const line = (await sumsRes.text()).split('\n').map((l) => l.trim().split(/\s+\*?/)).find((p) => p[1] === name);
+    if (!line || !/^[0-9a-f]{64}$/i.test(line[0])) throw new Error('no-checksums');
+    expected = line[0].toLowerCase();
+  } catch (err) {
+    throw guard(err);
+  }
 
-  const res = await fetchFn(url, { headers, signal });
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-  const total = Number(res.headers.get('content-length')) || info.installer.size || 0;
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, path.basename(name));
   const partial = `${file}.part`;
-  const out = fs.createWriteStream(partial);
-  const hash = crypto.createHash('sha256');
-  let received = 0;
-  let lastReport = 0;
+  const stall = new AbortController();
+  const both = signal ? AbortSignal.any([signal, stall.signal]) : stall.signal;
+  let timer = null;
+  const kick = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => stall.abort(), stallMs);
+  };
+  let out = null;
   try {
+    kick();
+    const res = await fetchFn(url, { headers, signal: both });
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    const total = Number(res.headers.get('content-length')) || info.installer.size || 0;
+    out = fs.createWriteStream(partial);
+    let streamError = null;
+    out.on('error', (e) => { streamError = e; }); // reported below, never an unhandled 'error' event
+    const hash = crypto.createHash('sha256');
+    let received = 0;
+    let lastReport = 0;
     const reader = res.body.getReader();
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      kick();
+      if (streamError) throw streamError;
       hash.update(value);
       received += value.length;
-      if (!out.write(Buffer.from(value))) await new Promise((r) => out.once('drain', r));
+      if (!out.write(Buffer.from(value))) await new Promise((r, j) => { out.once('drain', r); out.once('error', j); });
       const now = Date.now();
       if (onProgress && now - lastReport > 250) {
         lastReport = now;
         onProgress(received, total);
       }
     }
-    await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+    clearTimeout(timer);
+    await new Promise((resolve, reject) => out.end((err) => (err || streamError ? reject(err || streamError) : resolve())));
+    await closed(out);
+    onProgress?.(received, total);
+    if (hash.digest('hex') !== expected) throw new Error('checksum-mismatch');
+    fs.renameSync(partial, file);
+    return file;
   } catch (err) {
-    await closeStream(out); // a stream destroyed before it was opened would create the file again after the delete
-    fs.rmSync(partial, { force: true });
-    throw err;
+    clearTimeout(timer);
+    if (out) await closed(out);
+    await removeFile(partial);
+    throw signal?.aborted ? cancelled() : stall.signal.aborted ? new Error('stalled') : err;
   }
-  onProgress?.(received, total);
-  if (hash.digest('hex') !== expected) {
-    fs.rmSync(partial, { force: true });
-    throw new Error('checksum-mismatch');
-  }
-  fs.renameSync(partial, file);
-  return file;
 }
 
 // ---- what the user decided about a version ---------------------------------------------------------------
-// state = { skipVersion, remindUntil } (kept in the settings). -> 'show' | 'skipped' | 'snoozed'
+// state = { skipVersion, remindUntil } (kept in the settings). -> 'show' | 'skipped' | 'snoozed' | 'none'
 export function bannerState(info, state, now = Date.now()) {
   if (!info?.ok || !info.available) return 'none';
   if (state?.skipVersion && state.skipVersion === info.latest) return 'skipped'; // until a newer one comes
