@@ -91,7 +91,7 @@ Results of this release (26.10.2), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`
 Before choosing the ID3 writer for release 26.10.1, `node-id3` 0.2.9 was tried and **rejected**: it dropped an unknown frame, rewrote a v2.4 tag as v2.3 and left a `TDRC` frame (v2.4 only) in it, which exiftool reports as invalid.
 
 **Not validated:**
-- **Windows and macOS for this release**: the installers, the first-launch warnings, drag & drop from the file manager, and *Close and install* (on Windows whether the installer starts the new version again at the end, on macOS the disk image). The earlier release (26.10.1) was run on macOS (Intel) on 2026-10-01.
+- **Linux on a real desktop** (the AppImage and its *Close and install*). Windows and macOS (the installers, the first-launch warnings, drag & drop from the file manager, *Close and install*) have been tried by hand by the author (declared 17 October 2026).
 - Files written by the many real programs, recorders and automation systems: only generated files and FFmpeg's were used. In particular iXML from field recorders and cart chunks from automation systems were not tried.
 - The texts of the **iXML** and **AES46** specifications and of **EBU Tech 3306** (see the table above): the layouts were taken from implementations (FFmpeg, libsndfile) or from common practice.
 - Very large real files: a 4.5 GB sparse file was used for the header and the in-place patch only; rewriting a file of several gigabytes was not timed.
