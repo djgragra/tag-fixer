@@ -1,5 +1,10 @@
 # Changelog
 
+## 26.10.4 — 2026-10-22
+
+- **macOS (Apple Silicon)**: the app is now signed ad hoc when it is packaged, so an Apple Silicon Mac no longer says it is "damaged" and can open it after *System Settings → Privacy & Security → Open Anyway*. If you installed an earlier version and it will not open, run `xattr -cr "/Applications/Tag Fixer.app" && codesign --force --deep -s - "/Applications/Tag Fixer.app"` in Terminal. The build checks the signature of the app inside both disk images.
+- **Maintenance**: the log module is now `src/logger.js`, like the other OnAir Garage apps; the tests that compare against exiftool now run in the automatic checks.
+
 ## 26.10.3 — 2026-10-17
 
 - **Guided update, safer download**: the shared `updater` module is now fully version 2. An installer download that fails, is cancelled, stalls or fails its checksum no longer leaves a `.part` file in the Downloads folder (the file is closed before it is deleted, which Windows requires), and `.part` files left by an earlier run are removed when the app starts and before a new download.

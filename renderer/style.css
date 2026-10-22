@@ -218,7 +218,7 @@ ul.plain { margin: 4px 0; padding-left: 18px; }
 
 /* Tip jar box in Help & About: small, visible, one button; nothing in the main window */
 .tip { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 4px 14px; margin-top: 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
-.tip__art { grid-row: 1 / span 2; width: 80px; height: auto; display: block; }
+.tip__art { grid-row: 1 / span 2; width: 80px; height: auto; display: block; cursor: pointer; }
 .tip__text { margin: 0; font-size: 13px; color: var(--ink2); }
 .tip__btn { justify-self: start; cursor: pointer; padding: 4px 16px; border: 2px solid #fbf4e4; border-radius: 999px; background: #c8232c; color: #fbf4e4; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; box-shadow: 0 0 0 1px var(--line); }
 .tip__btn:hover { background: #de2d37; }

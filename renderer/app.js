@@ -1238,7 +1238,7 @@
       btn(t("upd.page"), "btn--ghost", openNotes);
     }
   }
-  function openNotes() { var i = updInfo(); if (i && i.url) api.openExternal(i.url); }
+  function openNotes() { api.update.page(); }
   function startDownload() {
     upd.phase = "downloading"; upd.pct = 0; upd.received = 0; upd.total = 0; upd.error = null;
     renderUpdate();
@@ -1286,7 +1286,7 @@
   }
   $("whatsNewOk").addEventListener("click", function () { closeDlg("whatsNewDlg"); api.whatsNew.seen(); });
   $("whatsNewDlg").addEventListener("cancel", function () { api.whatsNew.seen(); });
-  $("whatsNewNotes").addEventListener("click", function () { api.openExternal("https://github.com/djgragra/tag-fixer/releases"); });
+  $("whatsNewNotes").addEventListener("click", function () { api.update.page(); });
 
   // ---- Help --------------------------------------------------------------------------------
   function buildHelp() {
@@ -1327,6 +1327,7 @@
   $("helpBtn").addEventListener("click", function () { openDlg("helpDlg"); });
   $("helpClose").addEventListener("click", function () { closeDlg("helpDlg"); });
   $("aboutTip").addEventListener("click", function () { api.openExternal(t("about.tipUrl")); });
+  $("aboutTipJar").addEventListener("click", function () { api.openExternal(t("about.tipUrl")); }); // the jar does what the button does
   document.querySelectorAll("a[data-ext]").forEach(function (a) { a.addEventListener("click", function (e) { e.preventDefault(); if (/^https:/.test(a.href)) api.openExternal(a.href); }); });
 
   // ---- Start -------------------------------------------------------------------------------

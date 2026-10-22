@@ -14,8 +14,8 @@ import { runChecks } from './src/checks.js';
 import { toCsv, parseCsv, planImport } from './src/csv.js';
 import { createStore, sanitizeSettings } from './src/settings.js';
 import { buildExport, prepareImport, backupFileName } from './src/backup.js';
-import { checkForUpdate, downloadInstaller, sweepPartials, bannerState, remindLaterState, skipVersionState, makeSafetyCopy, installPlan, whatsNew, startupKind } from './src/updater.js';
-import { createLogger } from './src/logs.js';
+import { checkForUpdate, pageUrl, downloadInstaller, sweepPartials, bannerState, remindLaterState, skipVersionState, makeSafetyCopy, installPlan, whatsNew, startupKind } from './src/updater.js';
+import { createLogger } from './src/logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXTERNAL_OK = /^https:\/\/(onairgarage\.com|github\.com\/djgragra)(\/|$)/;
@@ -399,6 +399,8 @@ ipcMain.handle('update:download', async () => {
     return { ok: false, error: cancelled ? 'cancelled' : err.message };
   } finally { downloadAbort = null; }
 });
+// "Release notes" and "What's new" open the app's page on the site (installer, changelog, hashes), in the app's language.
+ipcMain.handle('update:page', () => { shell.openExternal(pageUrl(undefined, settings().language)); });
 ipcMain.handle('update:cancel', () => { downloadAbort?.abort(); return true; });
 ipcMain.handle('update:remind', () => { setUpdateState(remindLaterState(settings().updateState)); return updateView(lastUpdateInfo); });
 ipcMain.handle('update:skip', () => { setUpdateState(skipVersionState(settings().updateState, lastUpdateInfo?.latest)); return updateView(lastUpdateInfo); });

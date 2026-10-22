@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('api', {
     check: invoke('update:check'),
     state: invoke('update:state'),
     download: invoke('update:download'),
+    page: invoke('update:page'),
     cancel: invoke('update:cancel'),
     remind: invoke('update:remind'),
     skip: invoke('update:skip'),

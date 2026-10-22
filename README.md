@@ -72,7 +72,7 @@ No measurements. The rules come from these documents; "status" says how far each
 
 ## Validation and references
 
-Results of this release (26.10.3), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`ffprobe` / `ffmpeg`) as the independent reader. This is not a certified tool.
+Results of this release (26.10.4), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`ffprobe` / `ffmpeg`) and exiftool as the independent readers. This is not a certified tool.
 
 | Reference | What it validates | Result | How to re-run |
 |---|---|---|---|
@@ -80,11 +80,11 @@ Results of this release (26.10.3), on Linux, with Node.js 22 and FFmpeg 6.1.1 (`
 | `dev/id3.test.js` (hand-built tags) | v2.2 / 2.3 / 2.4 reading, v2.2 editing, in-place and rewrite, unknown frames and audio byte-identical, encodings, ID3v1 untouched, cover replace / remove / PIC / APIC, read-only cases | pass | `npm test` |
 | `dev/flac.test.js` | Vorbis comment edit in place and rewrite, other blocks and audio byte-identical, ID3 prefix, no comment block, corrupt block | pass | `npm test` |
 | FFmpeg 6.1.1 (independent reader and encoder) | files written by a real encoder are read and edited (MP3 and FLAC); **the decoded audio is identical (md5) before and after** the edit; ffprobe sees the new values and the untouched frames; `bext` is shown as `comment`; RF64 files are read | pass | `npm test` (needs `ffmpeg` with libmp3lame) |
-| exiftool (independent reader) | reads the `bext` and ID3 values we write, no warnings | not run in this release: exiftool was not installed, so the two tests that need it were skipped (the ID3 values were checked with FFmpeg only); they passed with it in 26.10.1 | `npm test` (needs `exiftool`) |
+| exiftool (independent reader) | reads the `bext` and ID3 values we write, no warnings | pass (26.10.4: exiftool installed, 113 tests, none skipped; the automatic checks now install it) | `npm test` (needs `exiftool`) |
 | `dev/batch.test.js` | backup, restore (bytes, modification time, names), rename (taken name, duplicates, case-only, rename only), a locked field stops a file before any backup, every format in one batch | pass | `npm test` |
 | `dev/tools.test.js` | patterns, text operations, dates from names, CSV (quotes, delimiters, formula protection, import plan), checks, the jobs behind the dialogs | pass | `npm test` |
-| `dev/guided.test.js` | settings, configuration backup (replace / add, wrong files), update check with a fake GitHub, SHA-256 check and cleanup, remind / skip, safety copy, install plan, What's new, log rotation, `CLAUDE.md` | pass | `npm test` |
-| `dev/updater.test.js` | the shared `updater` module, version 2: a download that fails, is cancelled, stalls, fails the checksum or fails at the final rename leaves no `.part` file; `.part` files left by an earlier run are swept; nothing else in the folder is touched | pass | `npm test` |
+| `dev/guided.test.js` | settings, configuration backup (replace / add, wrong files), update check with a fake GitHub, SHA-256 check and cleanup, remind / skip, safety copy, install plan, What's new, log rotation, `CLAUDE.md`, the ad-hoc signature hook is wired in and ignores Windows and Linux | pass | `npm test` |
+| `dev/updater.test.js` | the shared `updater` module, version 2: a download that fails, is cancelled, stalls, fails the checksum or fails at the final rename leaves no `.part` file; `.part` files left by an earlier run are swept; nothing else in the folder is touched; `pageUrl` (the app page on the site in each language) | pass | `npm test` |
 | `dev/i18n.test.js` | the same keys in English, Italian and Spanish; every key the window uses and every error code has a text; the tip jar box (text in three languages, the support page of the app's language, allowed link, image shipped) | pass | `npm test` |
 | `dev/e2e-electron.mjs` (real app, DevTools protocol, native dialogs answered by `dev/test-dialogs.cjs`) | drop files of every type, edit cells, invalid values block saving, Convert to ASCII, undo / redo, tools (date, history, find, pattern read and rename, cover, CSV out and in, saved pattern, configuration backup out and in), check list, save of 6 files with renames, backup, restore, settings, language | pass | `node dev/e2e-electron.mjs` |
 | `dev/e2e-update.mjs` (real app against a fake GitHub on localhost) | update banner, remind later saved, a wrong SHA-256 is refused and leaves no file, real download with progress, verified file, safety copy before "Close and install" (Linux shows the file) | pass | `node dev/e2e-update.mjs` (needs `openssl`) |
@@ -97,7 +97,7 @@ Before choosing the ID3 writer for release 26.10.1, `node-id3` 0.2.9 was tried a
 - The texts of the **iXML** and **AES46** specifications and of **EBU Tech 3306** (see the table above): the layouts were taken from implementations (FFmpeg, libsndfile) or from common practice.
 - Very large real files: a 4.5 GB sparse file was used for the header and the in-place patch only; rewriting a file of several gigabytes was not timed.
 - How other software reads the edited files (beyond FFmpeg and exiftool).
-- exiftool in this release's run (it was not installed there).
+- The ad-hoc signature of the macOS app: the build checks it on the Mac runner, but whether the app installed from the DMG opens on a clean Apple Silicon Mac must be tried by hand.
 
 Try the tool on copies of your own files first.
 
@@ -115,6 +115,14 @@ Try the tool on copies of your own files first.
 | AES46-2002 (cart chunk) | **not read**; Dati insufficienti per verificare |
 | iXML specification — https://www.ixml.info/ | **not read**: the site could not be reached on 2026-10-13; Dati insufficienti per verificare |
 | EBU R 98 (CodingHistory syntax), EBU R 99 (OriginatorReference) | **not read** |
+
+## Install
+
+Download the installer for your system from the [Releases](https://github.com/djgragra/tag-fixer/releases) page and check it against `SHA256SUMS.txt`. The app is free and has no developer certificate:
+
+- **macOS**: the app is signed ad hoc (no Apple account), so the first start says "unidentified developer": open *System Settings → Privacy & Security*, scroll down and click *Open Anyway*. **Second method**, in Terminal: `xattr -cr "/Applications/Tag Fixer.app" && codesign --force --deep -s - "/Applications/Tag Fixer.app"` (it also opens an earlier version that says "damaged"). Not yet tried on a clean Apple Silicon Mac from the DMG.
+- **Windows**: if SmartScreen appears, click *More info* → *Run anyway*.
+- **Linux**: `chmod +x Tag-Fixer-*.AppImage`, then run it.
 
 ## Run locally
 
@@ -137,7 +145,7 @@ Release files go to a GitHub release with a `SHA256SUMS.txt`. The update check e
 ## Structure
 
 - `main.js`, `preload.cjs` — Electron main process and the bridge to the window.
-- `src/` — the engine, independent of Electron: `bwf.js` (WAV, BWF, RF64, rewrite of chunks), `ixml.js`, `cart.js`, `id3.js` (ID3v2 reader and byte-preserving writer, covers), `flac.js`, `batch.js` (scan, backup, apply, rename, verify, restore), `patterns.js`, `textops.js`, `datefile.js`, `csv.js`, `checks.js`, `toolops.js` (the jobs behind the dialogs), `settings.js`, `backup.js`, `updater.js`, `logs.js`. `updater.js`, `backup.js` and `logs.js` are the shared modules of the OnAir Garage apps and carry a `// garage-common: <name> <version>` line.
+- `src/` — the engine, independent of Electron: `bwf.js` (WAV, BWF, RF64, rewrite of chunks), `ixml.js`, `cart.js`, `id3.js` (ID3v2 reader and byte-preserving writer, covers), `flac.js`, `batch.js` (scan, backup, apply, rename, verify, restore), `patterns.js`, `textops.js`, `datefile.js`, `csv.js`, `checks.js`, `toolops.js` (the jobs behind the dialogs), `settings.js`, `backup.js`, `updater.js`, `logger.js`. `updater.js`, `backup.js` and `logs.js` are the shared modules of the OnAir Garage apps and carry a `// garage-common: <name> <version>` line.
 - `renderer/` — interface (strict CSP, no inline script or style, no external resources); `i18n.js` has the three languages.
 - `assets/` — icons, generated from `assets/logo.svg` with `dev/make-icons.mjs`. `docs/screenshots/` — screenshots. `dev/` — tests, end-to-end scripts and tools.
 
