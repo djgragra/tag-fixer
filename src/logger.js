@@ -1,4 +1,4 @@
-// garage-common: logs 1
+// garage-common: logger 1
 // Log: a ring buffer for the UI plus one file per day (logs/tag-fixer_dd-mm-yyyy.log), at most 5 MB each, 7 days kept.
 import fs from 'node:fs';
 import path from 'node:path';

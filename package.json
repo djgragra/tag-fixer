@@ -1,6 +1,6 @@
 {
   "name": "tag-fixer",
-  "version": "26.10.3",
+  "version": "26.10.4",
   "description": "Batch viewer and editor for broadcast metadata: ID3 tags on MP3 and BWF bext fields on WAV, with automatic backup",
   "main": "main.js",
   "type": "module",
@@ -36,6 +36,7 @@
       "CHANGELOG.md",
       "package.json"
     ],
+    "afterPack": "dev/sign-adhoc.cjs",
     "directories": {
       "output": "release"
     },

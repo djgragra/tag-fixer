@@ -98,3 +98,11 @@ test('sweepPartials removes Tag-Fixer .part files an earlier run left, and nothi
   assert.deepEqual(sweepPartials(path.join(dir, 'missing')), []);
 });
 
+
+test('pageUrl: the app page on the site, in the language of the app', async () => {
+  const { pageUrl } = await import('../src/updater.js');
+  assert.equal(pageUrl('tag-fixer', 'en'), 'https://onairgarage.com/tools/tag-fixer/');
+  assert.equal(pageUrl('tag-fixer', 'it'), 'https://onairgarage.com/it/tools/tag-fixer/');
+  assert.equal(pageUrl('tag-fixer', 'es'), 'https://onairgarage.com/es/tools/tag-fixer/');
+  assert.equal(pageUrl(undefined, 'fr'), 'https://onairgarage.com/tools/tag-fixer/');
+});

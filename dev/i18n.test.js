@@ -93,6 +93,8 @@ test('tip jar box: text, button and the support page in the app\'s language; the
   }
   assert.ok(html.includes('id="aboutTip"') && html.includes('src="img/tip-jar.png"'));
   assert.ok(app.includes('api.openExternal(t("about.tipUrl"))'));
+  assert.ok(html.includes('id="aboutTipJar"') && app.includes('$("aboutTipJar").addEventListener("click"'), 'the jar opens the same page as the button');
+  assert.ok(!/github\.com/.test(app.slice(app.indexOf('function openNotes'), app.indexOf('function openNotes') + 120)), 'release notes open the site page');
   assert.ok(fs.existsSync(path.join(root, 'renderer', 'img', 'tip-jar.png')));
   assert.ok(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).build.files.includes('renderer/**/*'));
 });

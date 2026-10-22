@@ -13,6 +13,7 @@ import path from 'node:path';
 
 export const REPO = 'djgragra/tag-fixer';
 export const PRODUCT = 'Tag-Fixer';
+export const SLUG = 'tag-fixer';
 const REPO_RE = /^[\w.-]+\/[\w.-]+$/;
 const DAY = 86_400_000;
 const STALL_MS = 60_000; // no byte for this long: the download is given up and cleaned up
@@ -55,6 +56,13 @@ export function releaseNotesSummary(body, maxLines = 6, maxChars = 500) {
   const lines = String(body || '').split(/\r?\n/).map((l) => l.replace(/^[#>*\-\s]+/, '').replace(/[*_`]/g, '').trim()).filter(Boolean);
   const text = lines.slice(0, maxLines).join('\n');
   return text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+}
+
+// The app's page on the site (installer for each system, changelog, hashes): the link that any "release notes" button uses.
+// English has no prefix; an unknown language falls back to English.
+export function pageUrl(slug = SLUG, lang = 'en') {
+  const prefix = lang === 'it' ? '/it' : lang === 'es' ? '/es' : '';
+  return `https://onairgarage.com${prefix}/tools/${slug}/`;
 }
 
 export async function checkForUpdate({ repo = REPO, current, fetchFn }) {

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { sanitizeSettings, createStore, MAX_PRESETS } from '../src/settings.js';
 import { buildExport, prepareImport, backupFileName } from '../src/backup.js';
 import { checkForUpdate, downloadInstaller, pickInstaller, isNewer, bannerState, remindLaterState, skipVersionState, makeSafetyCopy, installPlan, whatsNew, startupKind, releaseNotesSummary } from '../src/updater.js';
-import { createLogger, LOG_FILE_RE } from '../src/logs.js';
+import { createLogger, LOG_FILE_RE } from '../src/logger.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'tf-g-'));
@@ -220,7 +220,21 @@ test('CLAUDE.md points to the hub and is not ignored by git; shared modules carr
   const text = await fs.readFile(path.join(root, 'CLAUDE.md'), 'utf8');
   assert.match(text, /djgragra\/garage-hub/);
   assert.ok(!/^CLAUDE\.md$/m.test(await fs.readFile(path.join(root, '.gitignore'), 'utf8')));
-  for (const [file, name] of [['updater.js', 'updater'], ['backup.js', 'backup'], ['logs.js', 'logs']]) {
+  for (const [file, name] of [['updater.js', 'updater'], ['backup.js', 'backup'], ['logger.js', 'logger']]) {
     assert.match((await fs.readFile(path.join(root, 'src', file), 'utf8')).split('\n')[0], new RegExp(`^// garage-common: ${name} \\d+$`), file);
   }
+});
+
+// ---- macOS: ad-hoc signature ---------------------------------------------------------------------------
+
+test('macOS: the ad-hoc signature hook is wired into the build and only acts on a Mac app', async () => {
+  const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(pkg.build.afterPack, 'dev/sign-adhoc.cjs');
+  await fs.access(path.join(root, pkg.build.afterPack));
+  const { createRequire } = await import('node:module');
+  const hook = createRequire(import.meta.url)('./sign-adhoc.cjs').default;
+  assert.equal(await hook({ electronPlatformName: 'win32' }), undefined);
+  assert.equal(await hook({ electronPlatformName: 'linux' }), undefined);
+  const wf = await fs.readFile(path.join(root, '.github/workflows/build-installers.yml'), 'utf8');
+  assert.match(wf, /codesign --verify --deep --strict/, 'the workflow checks the apps inside the disk images');
 });
