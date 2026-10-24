@@ -120,6 +120,8 @@ Try the tool on copies of your own files first.
 
 Download the installer for your system from the [Releases](https://github.com/djgragra/tag-fixer/releases) page and check it against `SHA256SUMS.txt`. The app is free and has no developer certificate:
 
+The **user manual** is attached to every release as three PDFs: English (`Tag-Fixer-Manual-EN-<version>.pdf`), Italian (`-IT-`) and Spanish (`-ES-`). Its source is in `docs/manual/` (`python3 docs/manual/build.py <version> <folder>` makes the PDFs; it needs Chrome or Chromium).
+
 - **macOS**: the app is signed ad hoc (no Apple account), so the first start says "unidentified developer": open *System Settings → Privacy & Security*, scroll down and click *Open Anyway*. **Second method**, in Terminal: `xattr -cr "/Applications/Tag Fixer.app" && codesign --force --deep -s - "/Applications/Tag Fixer.app"` (it also opens an earlier version that says "damaged"). Not yet tried on a clean Apple Silicon Mac from the DMG.
 - **Windows**: if SmartScreen appears, click *More info* → *Run anyway*.
 - **Linux**: `chmod +x Tag-Fixer-*.AppImage`, then run it.
