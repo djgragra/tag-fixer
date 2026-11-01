@@ -116,6 +116,8 @@ Try the tool on copies of your own files first.
 | iXML specification — https://www.ixml.info/ | **not read**: the site could not be reached on 2026-10-13; Dati insufficienti per verificare |
 | EBU R 98 (CodingHistory syntax), EBU R 99 (OriginatorReference) | **not read** |
 
+<a href="https://ko-fi.com/F8V328ADFH"><img height="36" src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com"></a>
+
 ## Install
 
 Download the installer for your system from the [Releases](https://github.com/djgragra/tag-fixer/releases) page and check it against `SHA256SUMS.txt`. The app is free and has no developer certificate:
@@ -160,3 +162,11 @@ No third-party fonts or libraries at run time (system fonts). Build tools: Elect
 ## In italiano
 
 Tag Fixer legge e corregge in batch i metadati dei file audio: tag ID3 e copertine degli MP3, `bext` BWF con la coding history, iXML e cart dei WAV e BWF (anche RF64/BW64) e commenti Vorbis dei FLAC. Tabella come un foglio di calcolo, pattern per riempire i campi e rinominare i file, trova e sostituisci, data e ora dal file, CSV, controlli e annulla; ogni file ha prima una copia di sicurezza e si può ripristinare. È gratuito (licenza MIT) e funziona su Windows, macOS e Linux. L'aggiornamento è guidato: scarica, verifica lo SHA-256 e installa solo se glielo chiedi. Non è uno strumento certificato: le specifiche di iXML, AES46 e EBU Tech 3306 non sono state lette per intero (vedi tabelle sopra), e questa versione è stata provata su Linux; Windows e macOS no. Prova sempre il programma su copie dei tuoi file.
+
+## Support
+
+This tool is free and will stay free, with source code. If it saved your day, you can leave a tip on Ko-fi: a thank-you, nothing more.
+
+<a href="https://ko-fi.com/F8V328ADFH"><img height="36" src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com"></a>
+
+*Italiano:* lo strumento è gratuito e resta tale, con il codice sorgente. Se ti ha salvato la giornata puoi lasciare una mancia su Ko-fi: un grazie e basta.
